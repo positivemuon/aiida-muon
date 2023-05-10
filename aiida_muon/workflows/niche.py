@@ -1,13 +1,14 @@
+# -*- coding: utf-8 -*-
 """
 Niche - a program that finds interstitial spaces in crystals.
 """
-import sys
-import numpy as np
 import argparse
+import sys
 
+import numpy as np
 from pymatgen.core import Structure
-from pymatgen.util.coord import pbc_shortest_vectors
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+from pymatgen.util.coord import pbc_shortest_vectors
 
 
 class Niche:
@@ -114,8 +115,8 @@ class Niche:
         mask : np.ndarray
             List of interstitial positions not too close to host_lattice lattice points.
         """
-        from pymatgen.core.lattice import get_points_in_spheres
         from pymatgen.analysis.molecule_structure_comparator import CovalentRadius
+        from pymatgen.core.lattice import get_points_in_spheres
 
         interstitial_cart_coords = host_lattice.lattice.get_cartesian_coords(
             grid_coords

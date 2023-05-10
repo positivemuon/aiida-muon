@@ -33,18 +33,36 @@ class FindMuonWorkChain(WorkChain):
         """Specify inputs and outputs."""
         super().define(spec)
 
+        spec.input(
+            "structure",
+            valid_type=orm.StructureData,
+            required=True,
+            help="Input initial structure",
+        )
+
+        # spec.input("sc_matrix", valid_type = orm.ArrayData, required = True,
+        #           help = ' Array of supercell size, PS: array label is also "sc_matrix". ')
+
+        spec.input(
+            "sc_matrix",
+            valid_type=orm.List,
+            required=True,
+            help=" List of length 1 for supercell size ",
+        )
+
+        spec.input(
+            "mu_spacing",
+            valid_type=orm.Float,
+            default=lambda: orm.Float(1.0),
+            required=False,
+            help="Minimum distance in Angstrom between two starting muon positions  generated on a grid.",
+        )
+
         ## pw qe particular inputs
         spec.input_namespace(
             "qe",
             required=False,
             help="Input parameters, settings and options for QE DFT calculations",
-        )
-
-        spec.input(
-            "qe.structure",
-            valid_type=orm.StructureData,
-            required=True,
-            help="Input initial structure",
         )
 
         # read as list or array?
@@ -53,24 +71,6 @@ class FindMuonWorkChain(WorkChain):
             valid_type=orm.List,
             required=False,
             help="List of 3D magnetic moments in Bohr magneton of the corresponding input structure if magnetic",
-        )
-
-        # spec.input("qe.sc_matrix", valid_type = orm.ArrayData, required = True,
-        #           help = ' Array of supercell size, PS: array label is also "sc_matrix". ')
-
-        spec.input(
-            "qe.sc_matrix",
-            valid_type=orm.List,
-            required=True,
-            help=" List of length 1 for supercell size ",
-        )
-
-        spec.input(
-            "qe.mu_spacing",
-            valid_type=orm.Float,
-            default=lambda: orm.Float(1.0),
-            required=False,
-            help="Minimum distance in Angstrom between two starting muon positions  generated on a grid.",
         )
 
         spec.input(
@@ -155,9 +155,9 @@ class FindMuonWorkChain(WorkChain):
                 cls.run_scf_mu_origin,  # to be removed for better alternative
                 cls.compute_spin_density,
                 cls.inspect_get_contact_hperfine,
-                # cls.set_hperfine_outputs
+                cls.set_hperfine_outputs,
             ),
-            # cls.set_relaxed_muon_outputs
+            cls.set_relaxed_muon_outputs,
         )
 
         spec.exit_code(
@@ -180,11 +180,15 @@ class FindMuonWorkChain(WorkChain):
 
         # TODO: more exit codes catch errors and throw exit codes
 
-        # spec.output('all_sites_outputs',  valid_type = orm.List, required = True)
+        spec.output("all_index_uuid", valid_type=orm.Dict, required=True)
 
-        # spec.output('unique_sites_structures',  valid_type = orm.List, required = True)
+        spec.output("all_sites", valid_type=orm.Dict, required=True)
 
-        # spec.output('unique_sites_hyperfine',  valid_type = orm.List, required = False) #return only when magnetic
+        spec.output("unique_sites", valid_type=orm.Dict, required=True)
+
+        spec.output(
+            "unique_sites_hyperfine", valid_type=orm.Dict, required=False
+        )  # return only when magnetic
 
     def get_initial_muon_sites(self):
         """get list of starting muon sites"""
@@ -193,10 +197,7 @@ class FindMuonWorkChain(WorkChain):
         # Not clear only spacing parameter, need for minimum number of initial muon?
 
         rst = niche_add_impurities(
-            self.inputs.qe.structure,
-            orm.Str("H"),
-            self.inputs.qe.mu_spacing,
-            orm.Float(1.0),
+            self.inputs.structure, orm.Str("H"), self.inputs.mu_spacing, orm.Float(1.0)
         )
         # self.ctx.mu_lst = rst["mu_lst"]
         self.ctx.mu_lst = rst
@@ -212,12 +213,12 @@ class FindMuonWorkChain(WorkChain):
         # get the magnetic kind relevant for pw spin-polarization setup
         if "magmom" in self.inputs.qe:
             rst_mg = make_collinear_getmag_kind(
-                self.inputs.qe.structure, self.inputs.qe.magmom
+                self.inputs.structure, self.inputs.qe.magmom
             )
             self.ctx.struct = rst_mg["struct_magkind"]
             self.ctx.start_mg_dict = rst_mg["start_mag_dict"]
         else:
-            self.ctx.struct = self.inputs.qe.structure
+            self.ctx.struct = self.inputs.structure
 
         # check and get hubbard u
         inpt_st = self.ctx.struct.get_pymatgen_structure()
@@ -231,10 +232,14 @@ class FindMuonWorkChain(WorkChain):
         input_struct = self.ctx.struct.get_pymatgen_structure()
         # muon_list    = self.ctx.mu_lst.get_array('mu_list')
         muon_list = self.ctx.mu_lst
-        sc_mat = self.inputs.qe.sc_matrix[0]
+        sc_mat = self.inputs.sc_matrix[0]
 
         supercell_list = gensup(input_struct, muon_list, sc_mat)  # ordinary function
         self.ctx.supc_list = supercell_list
+
+        # init relaxation calc count
+        self.ctx.n = 0
+        self.ctx.n_uuid_dict = {}
 
     def setup_pw_overrides(self):
         """Get the required overrides i.e pw parameter setup"""
@@ -246,6 +251,7 @@ class FindMuonWorkChain(WorkChain):
                 "kpoints_distance": self.inputs.qe.k_dist.value,
                 "pw": {
                     "parameters": {},
+                    "metadata": {},
                     # 'metadata': self.inputs.qe.metadata.get_dict(),
                     #'settings': self.inputs.qe.settings.get_dict(),
                 },
@@ -255,6 +261,8 @@ class FindMuonWorkChain(WorkChain):
                 "kpoints_distance": self.inputs.qe.k_dist.value,
                 "pw": {
                     "parameters": {},
+                    "metadata": {},
+                    #'metadata': {'description': 'Muon site calculations for '+self.inputs.structure.get_pymatgen_structure().formula}
                     # 'metadata': self.inputs.qe.metadata.get_dict(),
                     #'settings': self.inputs.qe.settings.get_dict(),
                 },
@@ -283,6 +291,13 @@ class FindMuonWorkChain(WorkChain):
             overrides["base"]["pw"]["parameters"], {"ELECTRONS": {"mixing_beta": 0.30}}
         )
         # overrides['base']['pw']['parameters'] = recursive_merge(overrides['base']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
+        overrides["base"]["pw"]["metadata"] = recursive_merge(
+            overrides["base"]["pw"]["metadata"],
+            {
+                "description": "Muon site calculations for "
+                + self.inputs.structure.get_pymatgen_structure().formula
+            },
+        )
         #
         overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
             overrides["base_final_scf"]["pw"]["parameters"], {"CONTROL": {"nstep": 200}}
@@ -297,6 +312,13 @@ class FindMuonWorkChain(WorkChain):
             {"ELECTRONS": {"mixing_beta": 0.30}},
         )
         # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
+        overrides["base_final_scf"]["pw"]["metadata"] = recursive_merge(
+            overrides["base_final_scf"]["pw"]["metadata"],
+            {
+                "description": "Muon site calculations for "
+                + self.inputs.structure.get_pymatgen_structure().formula
+            },
+        )
 
         if self.inputs.qe.charge_supercell:
             overrides["base"]["pw"]["parameters"] = recursive_merge(
@@ -395,7 +417,7 @@ class FindMuonWorkChain(WorkChain):
             # key = f'workchains.sub{i_index}' #nested sub
             key = f"workchain_{i_index}"
             self.report(
-                f"Launching PwRelaxWorkChain (PK={future.pk}) for supercell structure index {i_index}"
+                f"Launching PwRelaxWorkChain (PK={future.pk}) for supercell structure {supercell_list[i_index].formula} with index {i_index}"
             )
             self.to_context(**{key: future})
 
@@ -415,6 +437,7 @@ class FindMuonWorkChain(WorkChain):
         for i_index in range(len(supercell_list)):
             key = f"workchain_{i_index}"
             workchain = self.ctx[key]
+            self.ctx.n += 1
 
             # TODO:IMPLEMEMENT CHECKS FOR RESTART OF UNFINISHED CALCULATION
             #     AND/OR NUMBER OF UNCONVERGED CALC IS ACCEPTABLE
@@ -425,7 +448,7 @@ class FindMuonWorkChain(WorkChain):
                 )
                 return self.exit_codes.ERROR_RELAX_CALC_FAILED
             else:
-                pk = workchain.pk
+                uuid = workchain.uuid
                 energy = workchain.outputs.output_parameters.get_dict()["energy"]
                 rlx_structure = (
                     workchain.outputs.output_structure.get_pymatgen_structure()
@@ -434,8 +457,15 @@ class FindMuonWorkChain(WorkChain):
 
                 # computed_results.append((pk,rlx_structure,energy))
                 computed_results.append(
-                    ({"pk": pk, "rlxd_struct": rlx_structure, "energy": energy})
+                    (
+                        {
+                            "idx": self.ctx.n,
+                            "rlxd_struct": rlx_structure.as_dict(),
+                            "energy": energy,
+                        }
+                    )
                 )
+                self.ctx.n_uuid_dict.update({self.ctx.n: uuid})
 
                 # print(computed_results)
 
@@ -447,7 +477,7 @@ class FindMuonWorkChain(WorkChain):
         check if there are new magnetic equivalent sites to calculate
         """
         self.report("Analyzing the relaxed structures")
-        inpt_st = self.inputs.qe.structure.get_pymatgen_structure()
+        inpt_st = self.inputs.structure.get_pymatgen_structure()
 
         if "magmom" in self.inputs.qe:
             r_anly = analyze_structures(
@@ -462,7 +492,7 @@ class FindMuonWorkChain(WorkChain):
             )
 
         self.ctx.unique_cluster = r_anly["unique_pos"]
-        print("uniq_positions", self.ctx.unique_cluster)
+        # print('uniq_positions',self.ctx.unique_cluster)
 
         # revisit, this so the initial inputs and collected results are not ovewritten with repeated calls in outline
         self.ctx.supc_list_all = self.ctx.supc_list
@@ -485,6 +515,7 @@ class FindMuonWorkChain(WorkChain):
 
     def structure_is_magnetic(self):
         """Checking if structure is magnetic"""
+        self.report("Checking if structure is magnetic ")
 
         # return self.inputs.qe.magmom is not None
         # return 'magmom' in self.inputs.qe
@@ -508,8 +539,8 @@ class FindMuonWorkChain(WorkChain):
             # rlx_st = clus['rlxd_struct']
             # rlx_struct = orm.StructureData(pymatgen = rlx_st)
             # or
-
-            rlx_node = orm.load_node(clus["pk"])
+            c_uuid = self.ctx.n_uuid_dict[clus["idx"]]
+            rlx_node = orm.load_node(c_uuid)
             rlx_st = rlx_node.outputs.output_structure.get_pymatgen_structure()
 
             # move muon to origin
@@ -528,9 +559,8 @@ class FindMuonWorkChain(WorkChain):
 
             pwb_future = self.submit(pwb_builder)
             pwb_key = f"pwb_workchain_{j_index}"
-            c_pk = clus["pk"]
             self.report(
-                f"Launching PwBaseWorkChain (PK={pwb_future.pk}) for PWRelaxed (PK={c_pk}) structure"
+                f"Launching PwBaseWorkChain (PK={pwb_future.pk}) for PWRelaxed (uuid={c_uuid}) structure"
             )
             self.to_context(**{pwb_key: pwb_future})
 
@@ -560,12 +590,13 @@ class FindMuonWorkChain(WorkChain):
         # for direct pp.x without scf
         """
         for j_index, clus in enumerate(unique_cluster_list):
-            rlx_node = orm.load_node(clus['pk'])
+            c_uuid = self.ctx.n_uuid_dict[clus['idx']]
+            rlx_node = orm.load_node(c_uuid)
             pp_builder.parent_folder = rlx_node.outputs.remote_folder
 
             pp_future = self.submit(pp_builder)
             pkey = f'pworkchain_{j_index}'
-            self.report(f'Launching PpCalcJOb  with (PK={pp_future.pk}) for PWRelaxed (PK={clus['pk']}) structure')
+            self.report(f'Launching PpCalcJOb  with (PK={pp_future.pk}) for PWRelaxed (UUID={c_uuid}) structure')
             self.to_context(**{pkey: pp_future})
         """
 
@@ -585,10 +616,10 @@ class FindMuonWorkChain(WorkChain):
 
                 pp_future = self.submit(pp_builder)
                 pkey = f"pworkchain_{j_index}"
-                c_pk = clus["pk"]
+                c_uuid = self.ctx.n_uuid_dict[clus["idx"]]
                 self.report(
                     f"Launching PpCalcJOb  with (PK={pp_future.pk}) for PWRelaxed \
-                (PK={c_pk}) structure and PWBase-mu-origin (PK={pwb_workchain.pk}) "
+                (UUID={c_uuid}) structure and PWBase-mu-origin (PK={pwb_workchain.pk}) "
                 )
                 self.to_context(**{pkey: pp_future})
 
@@ -596,7 +627,8 @@ class FindMuonWorkChain(WorkChain):
         """compute spin density at unique candidate sites"""
         self.report("Getting Contact field")
         unique_cluster_list = self.ctx.unique_cluster
-        contact_hf = []
+        # contact_hf = []
+        chf_dict = {}
 
         for j_index, clus in enumerate(unique_cluster_list):
             pwb_key = f"pwb_workchain_{j_index}"  # remove later
@@ -613,36 +645,59 @@ class FindMuonWorkChain(WorkChain):
             else:
                 p_pk = pworkchain.pk
                 sp_density = pworkchain.outputs.output_data.get_array("data")[0, 0, 0]
-                contact_hf.append(
-                    (
-                        {
-                            "rlx_pk": clus["pk"],
-                            "pwb_pk": pwb_workchain.pk,
-                            "pp_pk": pworkchain.pk,
-                            "spin_density": sp_density,
-                            "hf_T": sp_density * 52.430351,
-                        }
-                    )
-                )  # In Tesla
+                # contact_hf.append(({'rlx_idx':clus['idx'],'pwb_pk':pwb_workchain.pk, 'pp_pk':pworkchain.pk, 'spin_density':sp_density, 'hf_T':sp_density*52.430351})) # In Tesla
+                chf_dict.update(
+                    {str(clus["idx"]): [sp_density, sp_density * 52.430351]}
+                )
 
-        self.ctx.cont_hf = contact_hf
-        print("contact_results ", self.ctx.cont_hf)
+        # self.ctx.cont_hf = contact_hf
+        self.ctx.cont_hf = orm.Dict(dict=chf_dict)
+        # print("contact_results ",chf_dict)
 
-    # def set_hperfine_outputs(self):
-    #    """outputs"""
-    #    self.report('Setting hypferfine Outputs')
+    def set_hperfine_outputs(self):
+        """outputs"""
+        self.report("Setting hypferfine Outputs")
+        # self.out('unique_sites_hyperfine', get_list(self.ctx.cont_hf))
+        self.out("unique_sites_hyperfine", self.ctx.cont_hf)
 
-    # YET TO DECIDE HOW TO ORDER THE OUTPUTS. STRUCTURES ARE NOT SERIALIZABLE IN A LIST; SO NOT AN OPTION.
-    # DYNAMIC OUTPUT AND PUT STRUCTURES IN A DO LOOP
+    def set_relaxed_muon_outputs(self):
+        """outputs"""
+        # self.report('Setting Relaxation and analysis Outputs')
 
-    # def set_relaxed_muon_outputs(self):
-    # outputs
-    # self.report('Setting Relaxation and analysis Outputs')
+        self.out(
+            "all_index_uuid",
+            get_dict_uuid(orm.List(list(self.ctx.n_uuid_dict.items()))),
+        )
+
+        self.out("all_sites", get_dict_output(orm.List(self.ctx.relaxed_outputs_all)))
+
+        self.out("unique_sites", get_dict_output(orm.List(self.ctx.unique_cluster)))
 
 
-# GENERAL TODO: FOR SPEEDUP CHANGE MOSTLY TO ARRAY INSTEAD OF LIST ESP. IF ELEMENTS CAN BE MADE HOMOGENOUS
 #################################################################################
 # calcfunctions and called functions
+
+
+@calcfunction
+def get_dict_uuid(outdata):
+    """convert list to aiida dictionary for outputting"""
+    out_dict = {}
+
+    for i, dd in enumerate(outdata):
+        out_dict.update({str(dd[0]): dd[1]})
+
+    return orm.Dict(dict=out_dict)
+
+
+@calcfunction
+def get_dict_output(outdata):
+    """convert list to aiida dictionary for outputting"""
+    out_dict = {}
+
+    for i, dd in enumerate(outdata):
+        out_dict.update({str(dd["idx"]): [dd["rlxd_struct"], dd["energy"]]})
+
+    return orm.Dict(dict=out_dict)
 
 
 @calcfunction
@@ -751,7 +806,7 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
     (i) List of relaxed unique candidate sites supercell structures
     (ii) List of to be calculated magnetic inequivalent supercell structures
     """
-    pk_lst, mu_lst, enrg_lst = load_workchain_data(rlxd_results)
+    idx_lst, mu_lst, enrg_lst = load_workchain_data(rlxd_results)
 
     if magmom:
         assert input_st.num_sites == len(magmom)
@@ -762,7 +817,7 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
         st_smag = input_st.copy()
 
     clus_pos, new_pos = cluster_unique_sites(
-        pk_lst, mu_lst, enrg_lst, p_st=input_st, p_smag=st_smag
+        idx_lst, mu_lst, enrg_lst, p_st=input_st, p_smag=st_smag
     )
 
     # REVISIT
@@ -773,7 +828,7 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
     if len(new_pos) > 0:
         for i, nwp in enumerate(new_pos):
             for j, d in enumerate(rlxd_results):
-                if nwp[0] == d["pk"]:
+                if nwp[0] == d["idx"]:
                     nw_st = get_struct_wt_distortions(
                         init_supc, d["rlxd_struct"], nwp[1], st_smag
                     )
@@ -782,7 +837,7 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
     uniq_clus_pos = []
     for i, clus in enumerate(clus_pos):
         for j, d in enumerate(rlxd_results):
-            if clus[0] == d["pk"]:
+            if clus[0] == d["idx"]:
                 uniq_clus_pos.append(d)
 
     assert len(clus_pos) == len(uniq_clus_pos)

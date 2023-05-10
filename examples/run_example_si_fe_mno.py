@@ -12,6 +12,7 @@ import sys
 sys.path.append("../")
 
 from aiida_muon.workflows.find_muon import FindMuonWorkChain
+from aiida_muon.workflows.utils import read_wrkc_output
 
 # NB: FOR A PROPER RUN IT IS SUFFICIENT TO PROVIDE ONLY
 # (I)INPUT STRUCTURE/MAGMOM (II) SC MATRIX (III)THE PW AND PP CODES
@@ -38,7 +39,7 @@ pcode = orm.Code.get_from_string(pcodename)
 
 
 builder = FindMuonWorkChain.get_builder()
-builder.qe.sc_matrix = scmat_node
+builder.sc_matrix = scmat_node
 builder.qe.pw_code = code
 builder.qe.pp_code = pcode
 builder.qe.pseudofamily = orm.Str("SSSP/1.2/PBE/efficiency")
@@ -49,8 +50,8 @@ builder.qe.charge_supercell = orm.Bool(False)
 # uncomment below for Si
 """
 parser          = CifParser("data/Si.cif")
-smag2        = parser.get_structures(primitive = True)[0]
-aiida_structure2 = orm.StructureData(pymatgen = smag2)
+smag1        = parser.get_structures(primitive = True)[0]
+aiida_structure2 = orm.StructureData(pymatgen = smag1)
 builder.qe.structure = aiida_structure2
 builder.qe.mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
 """
@@ -63,10 +64,10 @@ aiida_structure = orm.StructureData(pymatgen=smag1)
 smag = aiida_structure.get_pymatgen_structure()
 magmoms = smag1.site_properties["magmom"]
 magmom = orm.List([list(magmom) for magmom in magmoms])
-builder.qe.structure = aiida_structure
+builder.structure = aiida_structure
 builder.qe.magmom = magmom
-builder.qe.mu_spacing = orm.Float(0.75)  # for Fe  no primitive 4 mu sites
-##builder.qe.mu_spacing = orm.Float(0.6) #for Fe primitive 4 mu sites
+builder.mu_spacing = orm.Float(0.75)  # for Fe  no primitive 4 mu sites
+##builder.mu_spacing = orm.Float(0.6) #for Fe primitive 4 mu sites
 # """
 
 # uncomment below for MnO
@@ -76,14 +77,14 @@ aiida_structure = orm.StructureData(pymatgen = smag1)
 smag = aiida_structure.get_pymatgen_structure()
 magmoms = smag1.site_properties['magmom']
 magmom = orm.List([list(magmom) for magmom in magmoms])
-builder.qe.structure = aiida_structure
+builder.structure = aiida_structure
 builder.qe.magmom = magmom
-builder.qe.mu_spacing = orm.Float(1.6) #for mno primitive 2 mu sites,  4 mno atoms
+builder.mu_spacing = orm.Float(1.6) #for mno primitive 2 mu sites,  4 mno atoms
 """
 
 
 pw_metadata = {
-    "description": "Si Fe MnO test",
+    "description": "Muonss site calculations for " + smag1.formula,
     #'dry_run' : True,
     "options": {"max_wallclock_seconds": 50000, "resources": {"num_machines": 1}},
     "label": "Si Fe MnO  relax test",
@@ -113,3 +114,7 @@ builder.qe.metadata = orm.Dict(dict=pw_metadata)
 
 node = run(builder)
 print(node)
+outdata = node["unique_sites"]
+# print(outdata)
+aa = read_wrkc_output(outdata)
+# print(aa)

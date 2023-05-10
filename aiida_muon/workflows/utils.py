@@ -239,7 +239,7 @@ def get_poslist1_not_in_list2(pos_lst1, pos_lst2, host_lattice, d_tol=0.5):
     return pos_not_in_list
 
 
-def cluster_unique_sites(pk_list, mu_list, enrg_list, p_st, p_smag):
+def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
     """
     Function that clusters + get symmetry unique muon positions
     from list of muon sites from relax calculations.
@@ -256,7 +256,7 @@ def cluster_unique_sites(pk_list, mu_list, enrg_list, p_st, p_smag):
             to be calculated.
 
     Params:
-        pk_list: list of the pk_lists corresponding to the calc. that gives the muon sites
+        idx_list: list of the index corresponding to the calc. that gives the muon sites
         mu_list: list of the muon sites in fractional coordinates
         enrg_list: list of their corresponding relative DFT energies in units of eV
         p_st: A pymatgen "unitcell" structure instance
@@ -264,14 +264,14 @@ def cluster_unique_sites(pk_list, mu_list, enrg_list, p_st, p_smag):
 
     Returns:
           (i) list of symmterically unique muon positions from the initial
-                list (mu_list) provided. The corresponding pk_lists and
+                list (mu_list) provided. The corresponding idx_lists and
                 energies in eV are returned as well
           (ii) list of magnetically inequivalent positions to be sent
                back to the daemon for relaxations.
 
     """
 
-    assert len(pk_list) == len(mu_list) == len(enrg_list)
+    assert len(idx_list) == len(mu_list) == len(enrg_list)
 
     # if no magnetic symmetry
     # if p_smag is None:
@@ -295,7 +295,7 @@ def cluster_unique_sites(pk_list, mu_list, enrg_list, p_st, p_smag):
     idx = prune_too_close_pos(mu_list, p_smag, d_tol, enrg_list)
     mu_list2 = mu_list[idx == np.arange(len(mu_list))]
     enrg_list2 = enrg_list[idx == np.arange(len(enrg_list))]
-    pk_list2 = pk_list[idx == np.arange(len(pk_list))]
+    idx_list2 = idx_list[idx == np.arange(len(idx_list))]
 
     # Step 2
     ieq = find_equivalent_positions(
@@ -303,10 +303,10 @@ def cluster_unique_sites(pk_list, mu_list, enrg_list, p_st, p_smag):
     )
     mu_list3 = mu_list2[ieq == np.arange(len(mu_list2))]
     enrg_list3 = enrg_list2[ieq == np.arange(len(enrg_list2))]
-    pk_list3 = pk_list2[ieq == np.arange(len(pk_list2))]
+    idx_list3 = idx_list2[ieq == np.arange(len(idx_list2))]
 
     # The cluster/unque positions from the given muon list
-    clus_pos = list(zip(pk_list3, mu_list3, enrg_list3))
+    clus_pos = list(zip(idx_list3, mu_list3, enrg_list3))
     clus_pos_sorted = sorted(clus_pos, key=lambda x: x[2])
 
     # TODO: EDIT THIS FOR ONLY WHEN MAGNETIC? CAN THIS CHANGE ANYTHING FOR NON_MAGNETIC SYSTEMS?
@@ -335,7 +335,7 @@ def cluster_unique_sites(pk_list, mu_list, enrg_list, p_st, p_smag):
                 for j in new_pos:
                     # new_pos_to_calc.append(j.tolist())
                     # identify which site it is magnetic equivalent to with the label and append
-                    new_pos_to_calc.append((pk_list3[i], j.tolist()))
+                    new_pos_to_calc.append((idx_list3[i], j.tolist()))
 
     return clus_pos_sorted, new_pos_to_calc
 
@@ -400,12 +400,13 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
 
 
 def load_workchain_data(data):
-    pk_list = []
+    """load and extract relaxed structures for analysis"""
+    idx_list = []
     mu_list = []
     enrg_list1 = []
     for j, d in enumerate(data):
-        pk_list.append(d["pk"])
-        scst = d["rlxd_struct"]
+        idx_list.append(d["idx"])
+        scst = Structure.from_dict(d["rlxd_struct"])
         mu_list.append(scst.frac_coords[scst.atomic_numbers.index(1)])  # for muon
         enrg_list1.append(d["energy"])
 
@@ -414,4 +415,16 @@ def load_workchain_data(data):
     e_min = min(enrg_list1)
     enrg_list = [(enrg - e_min) * ry2ev for enrg in enrg_list1]
 
-    return np.array(pk_list), np.array(mu_list), np.array(enrg_list)
+    return np.array(idx_list), np.array(mu_list), np.array(enrg_list)
+
+
+def read_wrkc_output(outdata):
+    """read workchain output dictionary and convert pymatgen structure dict to structure object"""
+    # outdata is aiida dictionary
+    out_dict = {}
+    data = outdata.get_dict()
+    for dd in data.keys():
+        py_st = Structure.from_dict(data[dd][0])
+        enrgy = data[dd][1]
+        out_dict.update({dd: [py_st, enrgy]})
+    return out_dict

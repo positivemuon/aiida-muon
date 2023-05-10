@@ -16,24 +16,27 @@ def generate_builder(generate_structure, fixture_code):
         """Generate default builder for `FindMuonWorkChain`"""
 
         inputstructure = generate_structure("Si")
-        scmat_node = orm.List([ [[1,0,0],[0,1,0],[0,0,1]], ])
+        scmat_node = orm.List(
+            [
+                [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+            ]
+        )
         code = fixture_code("quantumespresso.pw")
 
         builder = FindMuonWorkChain.get_builder()
-        builder.qe.structure = inputstructure
+        builder.structure = inputstructure
         builder.qe.pw_code = code
-        builder.qe.sc_matrix = scmat_node
+        builder.sc_matrix = scmat_node
 
         paramters = {
             "CONTROL": {
-                'max_seconds': 45000,
-                'forc_conv_thr': 0.1,
-                'etot_conv_thr': 0.1
+                "max_seconds": 45000,
+                "forc_conv_thr": 0.1,
+                "etot_conv_thr": 0.1,
             },
             "SYSTEM": {
                 "ecutwfc": 30.0,
                 "ecutrho": 240.0,
-                
             },
             "ELECTRONS": {
                 "conv_thr": 1.0e-4,
@@ -41,27 +44,21 @@ def generate_builder(generate_structure, fixture_code):
             },
         }
 
-    
         pw_metadata = {
-        'description': 'Si test', 
-        #'dry_run' : True, 
-        'options': {
-        'max_wallclock_seconds': 50000, 
-        'resources': {
-            'num_machines': 1
-            }
-            }, 
-            'label': 'Si Fe MnO  relax test'
-            }
-
-        pw_settings = {
-        'ONLY_INITIALIZATION': True
+            "description": "Si test",
+            #'dry_run' : True,
+            "options": {
+                "max_wallclock_seconds": 50000,
+                "resources": {"num_machines": 1},
+            },
+            "label": "Si Fe MnO  relax test",
         }
 
-        builder.qe.parameters = orm.Dict(dict=paramters)
-        builder.qe.metadata =orm.Dict(dict=pw_metadata)
-        #builder.qe.settings =orm.Dict(dict=pw_settings)
+        pw_settings = {"ONLY_INITIALIZATION": True}
 
+        builder.qe.parameters = orm.Dict(dict=paramters)
+        builder.qe.metadata = orm.Dict(dict=pw_metadata)
+        # builder.qe.settings =orm.Dict(dict=pw_settings)
 
         return builder
 
@@ -97,12 +94,12 @@ def test_getmuon(aiida_profile, generate_workchain):
     """
     process = generate_workchain()
     assert process.get_initial_muon_sites() is None
-    #assert process.ctx.n.value == 0
+    # assert process.ctx.n.value == 0
     assert isinstance(process.ctx.mu_lst, orm.List)
-    
+
 
 def test_gethubbardu(aiida_profile, generate_workchain):
-    """ Test """
+    """Test"""
     process = generate_workchain()
     assert process.setup_magnetic_hubbardu_dict() is None
     assert process.ctx.hubbardu_dict is None

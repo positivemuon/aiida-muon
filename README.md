@@ -1,5 +1,5 @@
 # aiida-muon
-An [AiiDA](www.aiida.net) workflow plugin for finding candidate implantation site(s) for the muon and contact hyperfine contribution to the local field. Candidate sites are obtained DFT relaxation calculations with  the [Quantum-Espresso code using its aiida plugin](https://aiida-quantumespresso.readthedocs.io/en/latest/) and subsequent symmetry analysis. 
+An [AiiDA](www.aiida.net) workflow plugin for finding candidate implantation site(s) for the muon and contact hyperfine contribution to the local field. Candidate sites are obtained DFT relaxation calculations with  the [Quantum-Espresso code using its aiida plugin](https://aiida-quantumespresso.readthedocs.io/en/latest/) and subsequent symmetry analysis.
 
 ## Dependencies
 To run the FindMuonWorkChain, aiida-core, plugin installations and aiida-quantum espresso code and computer setups are required.
@@ -32,7 +32,3 @@ cd examples/
 python run_example_si_fe_mno.py
 ```
 * (caveat: labels of codes to be edited)
-
-
-
-
