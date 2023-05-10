@@ -15,7 +15,7 @@ from aiida_muon.workflows.find_muon import FindMuonWorkChain
 from aiida_muon.workflows.utils import read_wrkc_output
 
 # NB: FOR A PROPER RUN IT IS SUFFICIENT TO PROVIDE ONLY
-# (I) INPUT STRUCTURE/MAGMOM (II) SC MATRIX (III)THE PW AND PP CODES
+# (I)INPUT STRUCTURE/MAGMOM (II) SC MATRIX (III)THE PW AND PP CODES
 
 
 # SCMATRIX
