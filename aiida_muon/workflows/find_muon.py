@@ -152,7 +152,7 @@ class FindMuonWorkChain(WorkChain):
                 cls.collect_all_results,
             ),
             if_(cls.structure_is_magnetic)(
-                cls.run_scf_mu_origin,  # to be removed for better alternative
+                cls.run_final_scf_mu_origin,  # to be removed if better alternative
                 cls.compute_spin_density,
                 cls.inspect_get_contact_hperfine,
                 cls.set_hperfine_outputs,
@@ -246,6 +246,7 @@ class FindMuonWorkChain(WorkChain):
 
         self.report("Setting up the relaxation calculation")
         overrides = {
+            #'final_scf' : orm.Bool(False),
             "base": {
                 "pseudo_family": self.inputs.qe.pseudofamily.value,
                 "kpoints_distance": self.inputs.qe.k_dist.value,
@@ -258,25 +259,23 @@ class FindMuonWorkChain(WorkChain):
             },
             "base_final_scf": {
                 "pseudo_family": self.inputs.qe.pseudofamily.value,
-                "kpoints_distance": self.inputs.qe.k_dist.value,
-                "pw": {
-                    "parameters": {},
-                    "metadata": {},
-                    #'metadata': {'description': 'Muon site calculations for '+self.inputs.structure.get_pymatgen_structure().formula}
-                    # 'metadata': self.inputs.qe.metadata.get_dict(),
-                    #'settings': self.inputs.qe.settings.get_dict(),
-                },
+                #     'kpoints_distance' : self.inputs.qe.k_dist.value,
+                #    'pw': {
+                #        'parameters': {},
+                #        'metadata': {},
+                #'metadata': {'description': 'Muon site calculations for '+self.inputs.structure.get_pymatgen_structure().formula}
+                # 'metadata': self.inputs.qe.metadata.get_dict(),
+                #'settings': self.inputs.qe.settings.get_dict(),
+                #        }
             },
-            "clean_workdir": orm.Bool(False),
+            "clean_workdir": orm.Bool(True),
         }
 
         ##TO DO:put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard
 
         if "parameters" in self.inputs.qe:
             overrides["base"]["pw"]["parameters"] = self.inputs.qe.parameters.get_dict()
-            overrides["base_final_scf"]["pw"][
-                "parameters"
-            ] = self.inputs.qe.parameters.get_dict()
+            # overrides['base_final_scf']['pw']['parameters'] = self.inputs.qe.parameters.get_dict()
 
         # set some cards
         overrides["base"]["pw"]["parameters"] = recursive_merge(
@@ -299,35 +298,18 @@ class FindMuonWorkChain(WorkChain):
             },
         )
         #
-        overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-            overrides["base_final_scf"]["pw"]["parameters"], {"CONTROL": {"nstep": 200}}
-        )
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'CONTROL':{'nstep': 200}})
         # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'smearing': 'gaussian'}})
-        overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-            overrides["base_final_scf"]["pw"]["parameters"],
-            {"ELECTRONS": {"electron_maxstep": 300}},
-        )
-        overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-            overrides["base_final_scf"]["pw"]["parameters"],
-            {"ELECTRONS": {"mixing_beta": 0.30}},
-        )
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'electron_maxstep': 300}})
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'mixing_beta': 0.30}})
         # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
-        overrides["base_final_scf"]["pw"]["metadata"] = recursive_merge(
-            overrides["base_final_scf"]["pw"]["metadata"],
-            {
-                "description": "Muon site calculations for "
-                + self.inputs.structure.get_pymatgen_structure().formula
-            },
-        )
+        # overrides['base_final_scf']['pw']['metadata'] = recursive_merge(overrides['base_final_scf']['pw']['metadata'], {'description': 'Muon site calculations for '+self.inputs.structure.get_pymatgen_structure().formula})
 
         if self.inputs.qe.charge_supercell:
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"tot_charge": 1.0}}
             )
-            overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-                overrides["base_final_scf"]["pw"]["parameters"],
-                {"SYSTEM": {"tot_charge": 1.0}},
-            )
+            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'tot_charge': 1.0}})
 
         # if self.inputs.magmom is not None:
         if "magmom" in self.inputs.qe and self.ctx.start_mg_dict:
@@ -342,18 +324,8 @@ class FindMuonWorkChain(WorkChain):
                     }
                 },
             )
-            overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-                overrides["base_final_scf"]["pw"]["parameters"],
-                {"SYSTEM": {"nspin": 2}},
-            )
-            overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-                overrides["base_final_scf"]["pw"]["parameters"],
-                {
-                    "SYSTEM": {
-                        "starting_magnetization": self.ctx.start_mg_dict.get_dict()
-                    }
-                },
-            )
+            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'nspin': 2}})
+            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'starting_magnetization': self.ctx.start_mg_dict.get_dict()}})
 
         # check and assign hubbard u
         if self.ctx.hubbardu_dict:
@@ -368,30 +340,17 @@ class FindMuonWorkChain(WorkChain):
                 overrides["base"]["pw"]["parameters"],
                 {"SYSTEM": {"Hubbard_U": self.ctx.hubbardu_dict}},
             )
-            overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-                overrides["base_final_scf"]["pw"]["parameters"],
-                {"SYSTEM": {"lda_plus_u": True}},
-            )
-            overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-                overrides["base_final_scf"]["pw"]["parameters"],
-                {"SYSTEM": {"lda_plus_u_kind": 0}},
-            )
-            overrides["base_final_scf"]["pw"]["parameters"] = recursive_merge(
-                overrides["base_final_scf"]["pw"]["parameters"],
-                {"SYSTEM": {"Hubbard_U": self.ctx.hubbardu_dict}},
-            )
+            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'lda_plus_u': True}})
+            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'lda_plus_u_kind': 0}})
+            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'Hubbard_U': self.ctx.hubbardu_dict}})
 
         if "metadata" in self.inputs.qe:
             overrides["base"]["pw"]["metadata"] = self.inputs.qe.metadata.get_dict()
-            overrides["base_final_scf"]["pw"][
-                "metadata"
-            ] = self.inputs.qe.metadata.get_dict()
+            # overrides['base_final_scf']['pw']['metadata'] = self.inputs.qe.metadata.get_dict()
 
         if "settings" in self.inputs.qe:
             overrides["base"]["pw"]["settings"] = self.inputs.qe.settings.get_dict()
-            overrides["base_final_scf"]["pw"][
-                "settings"
-            ] = self.inputs.qe.settings.get_dict()
+            # overrides['base_final_scf']['pw']['settings'] = self.inputs.qe.settings.get_dict()
 
         self.ctx.overrides = overrides
 
@@ -408,6 +367,9 @@ class FindMuonWorkChain(WorkChain):
                 overrides=self.ctx.overrides,
                 relax_type=RelaxType.POSITIONS,
             )
+
+            # No final scf in base
+            pw_builder.base_final_scf = {}
 
             # pw_builder['base']['pw']['metadata'] = self.inputs.qe.metadata.get_dict()
             # pw_builder['base']['pw']['metadata'] ['description'] = ' Relaxation for muon supercell index'+str(i_index)
@@ -526,7 +488,7 @@ class FindMuonWorkChain(WorkChain):
 
     # scf first then pp.x ! TODO: NOT NECESSARY REMOVE ON REVISIT
 
-    def run_scf_mu_origin(self):
+    def run_final_scf_mu_origin(self):
         """Move muon to origin and  perform scf"""
         unique_cluster_list = self.ctx.unique_cluster
 
