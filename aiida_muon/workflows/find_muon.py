@@ -9,6 +9,9 @@ from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_quantumespresso.workflows.pw.relax import PwRelaxWorkChain
 from pymatgen.electronic_structure.core import Magmom
 
+#MB
+from aiida_musconv.workflows.musconv import MusconvWorkChain
+
 from .niche import Niche
 from .utils import (
     check_get_hubbard_u_parms,
@@ -46,7 +49,7 @@ class FindMuonWorkChain(WorkChain):
         spec.input(
             "sc_matrix",
             valid_type=orm.List,
-            required=True,
+            required=False,   #MB put False by MB
             help=" List of length 1 for supercell size ",
         )
 
@@ -132,13 +135,32 @@ class FindMuonWorkChain(WorkChain):
         )
 
         spec.input(
-            "qe.pp.metadata",
+            "qe.pp_metadata",
             valid_type=orm.Dict,
             required=False,
             help=" Preferred metadata and scheduler options for pp.x",
         )
 
+        spec.input(
+            "musconv_metadata",
+            valid_type=orm.Dict,
+            required=False,
+            help=" Preferred metadata and scheduler options for musconv",
+        )
+
+        #MB trying to add in the workflow the MusconvWorkchain. 
+        #MB activate it only if sc_matrix not present.
+        spec.expose_inputs(
+            MusconvWorkChain,
+            namespace="musconv",
+            exclude=("structure", "pseudos", "kpoints", "pwscf"),
+        )  # use the  pw calcjob
+
         spec.outline(
+            if_(cls.not_converged_supercell)(     #MB
+                cls.converge_supercell,           #MB
+                cls.check_supercell_convergence,           #MB
+            ),
             cls.get_initial_muon_sites,
             cls.setup_magnetic_hubbardu_dict,
             cls.get_initial_supercell_structures,
@@ -161,6 +183,12 @@ class FindMuonWorkChain(WorkChain):
         )
 
         spec.exit_code(
+            404,
+            "ERROR_MUSCONV_CALC_FAILED",
+            message="The MusconvWorkChain subprocesses failed",
+        )
+
+        spec.exit_code(
             405,
             "ERROR_RELAX_CALC_FAILED",
             message="One of the PwRelaxWorkChain subprocesses failed",
@@ -179,6 +207,7 @@ class FindMuonWorkChain(WorkChain):
         )
 
         # TODO: more exit codes catch errors and throw exit codes
+        #MB add exit code for the musconv.
 
         spec.output("all_index_uuid", valid_type=orm.Dict, required=True)
 
@@ -189,6 +218,73 @@ class FindMuonWorkChain(WorkChain):
         spec.output(
             "unique_sites_hyperfine", valid_type=orm.Dict, required=False
         )  # return only when magnetic
+
+    #MB
+    def not_converged_supercell(self):
+        """understand if musconv is needed: search for the sc_matrix in inputs."""
+        return not hasattr(self.inputs,"sc_matrix")
+        
+    
+    #MB
+    def converge_supercell(self):
+        """call MusconvWorkchain"""
+
+        #MB naive, there should be some get_builder_from_protocol, so PW is ok.
+        builder = MusconvWorkChain.get_builder()
+        builder.structure = self.inputs.structure
+        builder.pwscf.code = self.inputs.qe.pw_code
+        parameters_override = {
+            "CONTROL": {
+                "calculation": "scf",
+                "restart_mode": "from_scratch",
+                "tstress": True,
+                "tprnfor": True,
+            },
+            "SYSTEM": {
+                #"ecutwfc": 30.0,
+                #"ecutrho": 240.0,
+                "tot_charge": int(self.inputs.qe.charge_supercell.value),
+                #'nspin': 2,
+                "occupations": "smearing",
+                "smearing": "cold",
+                "degauss": 0.01,
+            },
+            "ELECTRONS": {
+                "conv_thr": 1.0e-6,
+                "electron_maxstep": 300,
+                "mixing_beta": 0.3,
+            },
+        }
+
+        
+        #
+
+        parameters = self.inputs.qe.parameters.get_dict()
+        
+        parameters = recursive_merge(
+            parameters, parameters_override
+        )
+        
+        builder.pwscf.parameters = orm.Dict(dict=parameters)
+        
+        if hasattr(self.inputs,"musconv_metadata"):
+            builder.pwscf.metadata = self.inputs.musconv_metadata.get_dict()
+
+        future = self.submit(builder)
+        # key = f'workchains.sub{i_index}' #nested sub
+        key = "MusconvWorkchain"
+        self.report(
+            f"Launching MusconvWorkchain (PK={future.pk}) for  structure {self.inputs.structure.get_pymatgen_structure().formula}"
+        )
+        self.to_context(**{key: future})
+
+    #MB
+    def check_supercell_convergence(self):
+        """check if is finished ok"""
+
+        if not self.ctx["MusconvWorkchain"].is_finished_ok:
+            return self.exit_codes.ERROR_MUSCONV_CALC_FAILED
+            
 
     def get_initial_muon_sites(self):
         """get list of starting muon sites"""
@@ -205,11 +301,19 @@ class FindMuonWorkChain(WorkChain):
     def setup_magnetic_hubbardu_dict(self):
         """
         Gets:
-        (i)structure with kindname from magmom
-        (ii) Dictionary for startuing magnetization
+        (i) Structure with kindname from magmom
+        (ii) Dictionary for starting magnetization
         (iii) Dictionary for Hubbard-U parameters
         """
-
+        '''
+        Miki Bonacci: here there should be the improvement, - pt1 -
+        only needed to be generated the structure data which contains all the magmom and hubbard info.
+        Moreover, this should be done as protocol in the workflow? the hubbard U ecc...
+        We have the magmom as input, then the Hubbard is added by default values, so we do not need to do it 
+        inside the workflow. If we have HubbardStructureData, we can define it later (by inputs manually), or
+        automatically in the get_builder_protocol. 
+        Moreover, this can be done before the get_initial_muon sites: we do not define magmom and U for the muon.
+        '''
         # get the magnetic kind relevant for pw spin-polarization setup
         if "magmom" in self.inputs.qe:
             rst_mg = make_collinear_getmag_kind(
@@ -227,12 +331,21 @@ class FindMuonWorkChain(WorkChain):
 
     def get_initial_supercell_structures(self):
         """Get initial supercell+muon list"""
+        '''
+        Miki Bonacci: here there should be the improvement, - pt2 -
+        only needed to be generated the structure data which contains all the magmom and hubbard info.
+        '''
 
         self.report("Getting supercell list")
         input_struct = self.ctx.struct.get_pymatgen_structure()
         # muon_list    = self.ctx.mu_lst.get_array('mu_list')
         muon_list = self.ctx.mu_lst
-        sc_mat = self.inputs.sc_matrix[0]
+
+        #MB
+        if hasattr(self.inputs,"sc_matrix"):
+            sc_mat = self.inputs.sc_matrix[0]
+        else:
+            sc_mat = self.ctx["MusconvWorkchain"].outputs.Converged_SCmatrix.get_array('sc_mat')
 
         supercell_list = gensup(input_struct, muon_list, sc_mat)  # ordinary function
         self.ctx.supc_list = supercell_list
@@ -243,7 +356,12 @@ class FindMuonWorkChain(WorkChain):
 
     def setup_pw_overrides(self):
         """Get the required overrides i.e pw parameter setup"""
-
+        '''
+        Miki Bonacci: I think that this overrides are no more needed once we have the MagneticStructureData.
+        Also, if we do this in a protocol, we can also tune it before the run, just in case.
+        Hubbard can be set by protocol, as we have the defaults. 
+        base_final_scf not needed because it is not currently used: but we can use its inputs to run the final scf with muon at the orgin? 
+        '''
         self.report("Setting up the relaxation calculation")
         overrides = {
             #'final_scf' : orm.Bool(False),
@@ -312,6 +430,7 @@ class FindMuonWorkChain(WorkChain):
             # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'tot_charge': 1.0}})
 
         # if self.inputs.magmom is not None:
+        #MB this should be automatically done in the new implementation with the MagneticStructureData.
         if "magmom" in self.inputs.qe and self.ctx.start_mg_dict:
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"nspin": 2}}
@@ -328,6 +447,7 @@ class FindMuonWorkChain(WorkChain):
             # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'starting_magnetization': self.ctx.start_mg_dict.get_dict()}})
 
         # check and assign hubbard u
+        # MB this should be automatically done in the new implementation, at least at the protocol generation level.
         if self.ctx.hubbardu_dict:
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"lda_plus_u": True}}
@@ -534,8 +654,9 @@ class FindMuonWorkChain(WorkChain):
         pp_builder = PpCalculation.get_builder()
         pp_builder.code = self.inputs.qe.pp_code
 
-        if "pp.metadata" in self.inputs.qe:
-            pp_builder.metadata = self.inputs.qe.pp.metadata.get_dict()
+        #MB: if "pp.metadata" in self.inputs.qe:
+        if hasattr(self.inputs.qe,"pp_metadata"):
+            pp_builder.metadata = self.inputs.qe.pp_metadata.get_dict()
 
         parameters = orm.Dict(
             dict={
@@ -684,10 +805,16 @@ def niche_add_impurities(
 
     n_st = niche_instance.apply(niche_spacing.value, niche_distance.value)
 
+    '''
+    Miki Bonacci: The new_structure_data is needed here? don't think so.
+    '''
     new_structure_data = orm.StructureData()
     new_structure_data.set_pymatgen(n_st)
     # print(n_st)
 
+    '''
+    Miki Bonacci: I think the muon symmetry beaking (see next lines) can be optimized.
+    '''
     # +0.001 to break symmetry if at symmetry pos
     mu_lst = [
         i + 0.001
@@ -711,6 +838,9 @@ def niche_add_impurities(
 
 
 # Do we really need to keep this in the provenance?
+'''
+Miki Bonacci: I think yes, so we can track the provenance to the starting StructureData? 
+'''
 def gensup(p_st, mu_list, sc_mat):
     """
     This makes the supercell with the given SC matrix.

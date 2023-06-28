@@ -8,7 +8,7 @@ from pymatgen.electronic_structure.core import Magmom
 def get_collinear_mag_kindname(p_st, magm):
     """
     Using pymatgen structure and magmom properties, provides the kind name for
-    magnetic ditinct species for spin polarized caculations with aiida-quntum espresso
+    magnetic distinct species for spin polarized calculations with aiida-quantumespresso
 
     Parm:
         p_st: pymatgen structure instance
@@ -155,6 +155,9 @@ def find_equivalent_positions(
     Energies and energy tolerance (e_tol) are in eV
 
     """
+    '''
+    Miki Bonacci: should be more compact.
+    '''
 
     lattice = host_lattice.lattice
     # Bring to unit cell
