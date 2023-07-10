@@ -3,6 +3,8 @@ import numpy as np
 from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
+from pymatgen.symmetry import analyzer
+from pymatgen.util.coord import pbc_shortest_vectors
 
 
 def get_collinear_mag_kindname(p_st, magm):
@@ -141,11 +143,6 @@ def check_get_hubbard_u_parms(p_st):
 
 ##########################################################################
 
-from pymatgen.symmetry import analyzer
-from pymatgen.util.coord import pbc_shortest_vectors
-
-# from pymatgen.electronic_structure.core import Magmom
-
 
 def find_equivalent_positions(
     frac_coords, host_lattice, atol=1e-3, energies=None, e_tol=0.05
@@ -197,7 +194,47 @@ def find_equivalent_positions(
 def prune_too_close_pos(
     frac_positions, host_lattice, min_distance, energies=None, e_tol=0.05
 ):
-    """Returns index of too close atoms"""
+    """
+    Returns index of atom too close to another one in the cell.
+
+    If energies are not passed, only inter-atomic distance is considered.
+    Otherwise both conditions (distance and same energy) must be verified.
+
+    Parameters
+    ----------
+    frac_positions : numpy.array
+        The nAtoms x 3 array containing scaled atomic positions.
+
+    host_lattice : pymatgen.core.Structure
+        The lattice structure. Only its lattice property is used.
+
+    min_distance: float
+         Minimum distance in Angstrom between atoms. Atoms closer than this
+         will be considered the same unless they have different energy associated.
+
+    energies: list or numpy.array
+         Energy (or any other scalar property) associated with positions
+         reported in frac_positions.
+
+    e_tol: float
+        Absolute difference between the scalar property associated with atomic sites.
+
+    Returns
+    -------
+    np.array
+        A list of integers.
+        If the value of the item equals its index, the atoms is not within
+        `min_distance` from others (or the energy threshold is not satisfied).
+        If the value is -1, the atom (and possibly the energy) is close to another
+        one in the cell.
+
+    Suggestions:
+                 1. modify -1 into the index of the first atom that matched the conditions
+                    on energy and distance.
+                 2. change `energies` into `scalar_value` to make it more general.
+    
+    """
+    
     # energies and tolerance should be in eV
     lattice = host_lattice.lattice
 
