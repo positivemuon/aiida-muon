@@ -8,6 +8,7 @@ from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 from aiida_quantumespresso.workflows.pw.base import PwBaseWorkChain
 from aiida_quantumespresso.workflows.pw.relax import PwRelaxWorkChain
 from pymatgen.electronic_structure.core import Magmom
+from pymatgen.core import Structure
 
 from .niche import Niche
 from .utils import (
@@ -16,6 +17,7 @@ from .utils import (
     get_collinear_mag_kindname,
     get_struct_wt_distortions,
     load_workchain_data,
+    compute_dip_field,
 )
 
 
@@ -154,8 +156,9 @@ class FindMuonWorkChain(WorkChain):
             if_(cls.structure_is_magnetic)(
                 cls.run_final_scf_mu_origin,  # to be removed if better alternative
                 cls.compute_spin_density,
-                cls.inspect_get_contact_hperfine,
-                cls.set_hperfine_outputs,
+                cls.inspect_get_contact_hyperfine,
+                cls.get_dipolar_field,
+                cls.set_hyperfine_outputs,
             ),
             cls.set_relaxed_muon_outputs,
         )
@@ -189,6 +192,8 @@ class FindMuonWorkChain(WorkChain):
         spec.output(
             "unique_sites_hyperfine", valid_type=orm.Dict, required=False
         )  # return only when magnetic
+
+        spec.output('unique_sites_dipolar',  valid_type = orm.List, required = False) #return only when magnetic
 
     def get_initial_muon_sites(self):
         """get list of starting muon sites"""
@@ -534,7 +539,7 @@ class FindMuonWorkChain(WorkChain):
         pp_builder = PpCalculation.get_builder()
         pp_builder.code = self.inputs.qe.pp_code
 
-        if "pp.metadata" in self.inputs.qe:
+        if "metadata" in self.inputs.qe.pp:
             pp_builder.metadata = self.inputs.qe.pp.metadata.get_dict()
 
         parameters = orm.Dict(
@@ -585,7 +590,7 @@ class FindMuonWorkChain(WorkChain):
                 )
                 self.to_context(**{pkey: pp_future})
 
-    def inspect_get_contact_hperfine(self):
+    def inspect_get_contact_hyperfine(self):
         """compute spin density at unique candidate sites"""
         self.report("Getting Contact field")
         unique_cluster_list = self.ctx.unique_cluster
@@ -616,11 +621,40 @@ class FindMuonWorkChain(WorkChain):
         self.ctx.cont_hf = orm.Dict(dict=chf_dict)
         # print("contact_results ",chf_dict)
 
-    def set_hperfine_outputs(self):
+    
+    def get_dipolar_field(self):
+        unique_cluster_list = self.ctx.unique_cluster
+        cnt_field_dict = self.ctx.cont_hf.get_dict()
+        dip_results = []
+        for j_index, clus in enumerate(unique_cluster_list):
+            #
+            #rlx_st = clus['rlxd_struct']
+            rlx_st = Structure.from_dict(clus['rlxd_struct']) 
+            rlx_struct = orm.StructureData(pymatgen = rlx_st)
+            cnt_field = cnt_field_dict[str(clus['idx'])][1]
+            print(cnt_field)
+            b_field = compute_dipolar_field(self.inputs.structure,
+                                        self.inputs.qe.magmom,
+                                        self.inputs.sc_matrix[0],
+                                        rlx_struct, 
+                                        orm.Float(cnt_field)
+                                       )
+            #dip_results.update({str(clus['idx']):[b_field[0][0], b_field[0][1], b_field[0][2]]})  #as dict
+            dip_results.append(({'idx': clus['idx'],'Bdip':b_field[0][0],'B_T':b_field[0][1], 'B_T_norm':b_field[0][2]}))
+            
+        
+        self.ctx.dipolar_dict = orm.List(dip_results)
+        print("dipolar_results ",dip_results)
+            
+    
+    
+    def set_hyperfine_outputs(self):
         """outputs"""
-        self.report("Setting hypferfine Outputs")
-        # self.out('unique_sites_hyperfine', get_list(self.ctx.cont_hf))
-        self.out("unique_sites_hyperfine", self.ctx.cont_hf)
+        self.report('Setting hypferfine Outputs')
+        #self.out('unique_sites_hyperfine', get_list(self.ctx.cont_hf))
+        self.out('unique_sites_hyperfine', self.ctx.cont_hf)
+        self.out('unique_sites_dipolar', self.ctx.dipolar_dict)
+
 
     def set_relaxed_muon_outputs(self):
         """outputs"""
@@ -805,3 +839,21 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
     assert len(clus_pos) == len(uniq_clus_pos)
 
     return {"unique_pos": uniq_clus_pos, "mag_inequivalent": nw_stc_calc}
+
+@calcfunction
+def compute_dipolar_field(
+    p_st: orm.StructureData,
+    magmm: orm.List,
+    sc_matr: orm.List, 
+    r_supst: orm.StructureData,
+    cnt_field: orm.Float):
+    """
+    This calcfunction calls the compute dipolar field
+    """
+
+    pmg_st = p_st.get_pymatgen_structure()
+    r_sup = r_supst.get_pymatgen_structure()
+    
+    b_fld = compute_dip_field(pmg_st, magmm, sc_matr, r_sup, cnt_field.value)
+    
+    return orm.List([b_fld])
