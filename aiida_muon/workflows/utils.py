@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 import numpy as np
+from muesr.core import Sample
+from muesr.core.atoms import Atoms
+from muesr.engines.clfc import find_largest_sphere, locfield
 from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
-from pymatgen.io.ase import  AseAtomsAdaptor
-from muesr.core import Sample
-from muesr.engines.clfc import locfield, find_largest_sphere
-from muesr.core.atoms import Atoms
+from pymatgen.io.ase import AseAtomsAdaptor
 
 
 def get_collinear_mag_kindname(p_st, magm):
@@ -434,11 +434,11 @@ def read_wrkc_output(outdata):
     return out_dict
 
 
-def compute_dip_field(p_st, magm, sc_mat, r_supst,  cnt_field):
+def compute_dip_field(p_st, magm, sc_mat, r_supst, cnt_field):
     """
     Computes the dipolar contribution to the muon local field
     using the MUESR code (10.7566/JPSCP.21.011052).
-    
+
     Parameters:
     -----------
         p_st: Input pymatgen structure instance
@@ -446,83 +446,94 @@ def compute_dip_field(p_st, magm, sc_mat, r_supst,  cnt_field):
         sc_mat: Input supercell matrix
         r_supst: pymatgen  relaxed structure instance  with the muon position
         cnt_field : DFT calculated contact field at the muon site in r_supst
-        
+
 
     Returns:
     ---------
-        The B_dip+B_L vectors, its norm and B_Total=B_dip+B_L +B_C vectors    
-    
+        The B_dip+B_L vectors, its norm and B_Total=B_dip+B_L +B_C vectors
+
     """
-    
-    #set-up required parameters
+
+    # set-up required parameters
     assert p_st.num_sites == len(magm)
-    
+
     for i, m in enumerate(magm):
-        p_st[i].properties['magmom'] = Magmom(m)
-    
+        p_st[i].properties["magmom"] = Magmom(m)
+
     p_scst = p_st.copy()
     p_scst.make_supercell(sc_mat)
-    
-    #center the supercell around the muon for no-PBC cases. muon at (0.5,0.5,0.5)
+
+    # center the supercell around the muon for no-PBC cases. muon at (0.5,0.5,0.5)
     musite = r_supst.frac_coords[r_supst.atomic_numbers.index(1)]
-    #remove muon atom from cell
+    # remove muon atom from cell
     r_supst.remove_sites([r_supst.atomic_numbers.index(1)])
-    r_supst.translate_sites(range(r_supst.num_sites),0.5-musite, frac_coords=True, to_unit_cell=True)
-    p_scst.translate_sites(range(p_scst.num_sites),0.5-musite, frac_coords=True, to_unit_cell=True)
-    
-    
+    r_supst.translate_sites(
+        range(r_supst.num_sites), 0.5 - musite, frac_coords=True, to_unit_cell=True
+    )
+    p_scst.translate_sites(
+        range(p_scst.num_sites), 0.5 - musite, frac_coords=True, to_unit_cell=True
+    )
+
     # Gen supercell fourier comp. mag moments in complex form
-    momt = p_scst.site_properties['magmom']
-    fc_sup = np.zeros([len(momt), 3],dtype=complex)
+    momt = p_scst.site_properties["magmom"]
+    fc_sup = np.zeros([len(momt), 3], dtype=complex)
     for i, m in enumerate(momt):
-        #fc_sup[i] = m.get_moment_relative_to_crystal_axes(p_scst.lattice).astype(complex)
+        # fc_sup[i] = m.get_moment_relative_to_crystal_axes(p_scst.lattice).astype(complex)
         fc_sup[i] = m.get_moment().astype(complex)
-    
+
     # get the s_axis for transforming the contact field that is isotropic
     s_axis = Magmom.get_suggested_saxis(momt)
-    
-    
-    #start dipolar calculations 
+
+    # start dipolar calculations
 
     smp = Sample()
-    
-    #get structure from pymatgen-->ase_atoms-->Muesr_atoms
+
+    # get structure from pymatgen-->ase_atoms-->Muesr_atoms
     ase_atom = AseAtomsAdaptor.get_atoms(p_scst)
-    #smp.cell = ase_atom  #raise TypeError('Cell is invalid.') for MnO.mcif
-    atoms = Atoms(symbols = ase_atom.symbols, scaled_positions = ase_atom.get_scaled_positions(),
-              cell = ase_atom.cell, pbc=True)
+    # smp.cell = ase_atom  #raise TypeError('Cell is invalid.') for MnO.mcif
+    atoms = Atoms(
+        symbols=ase_atom.symbols,
+        scaled_positions=ase_atom.get_scaled_positions(),
+        cell=ase_atom.cell,
+        pbc=True,
+    )
     smp.cell = atoms
-    
-    
-    
+
     smp.new_mm()
-    smp.mm.k = np.array([0., 0., 0.])
-    #smp.mm.fc_set(fc_sup, coord_system=2)
+    smp.mm.k = np.array([0.0, 0.0, 0.0])
+    # smp.mm.fc_set(fc_sup, coord_system=2)
     smp.mm.fc = fc_sup
-    
-    #smp.add_muon(musite+0.5-musite)
-    smp.add_muon([0.5,   0.5 ,  0.5])
-    #smp.current_mm_idx=0
-    radius = find_largest_sphere(smp,[50,50,50])
-    
-    #compute B in full(50x50x50 supercell) in the pristine structre
-    r_f_ps = locfield(smp,'s',[50,50,50],radius)
-    
-    #compute B in the single-supercell (1x1x1) using the pristine structre
-    r_s_ps = locfield(smp,'s',[1,1,1],radius)
-    
-    #change the cell to the relaxed
-    #smp.cell = AseAtomsAdaptor.get_atoms(r_supst)
+
+    # smp.add_muon(musite+0.5-musite)
+    smp.add_muon([0.5, 0.5, 0.5])
+    # smp.current_mm_idx=0
+    radius = find_largest_sphere(smp, [50, 50, 50])
+
+    # compute B in full(50x50x50 supercell) in the pristine structre
+    r_f_ps = locfield(smp, "s", [50, 50, 50], radius)
+
+    # compute B in the single-supercell (1x1x1) using the pristine structre
+    r_s_ps = locfield(smp, "s", [1, 1, 1], radius)
+
+    # change the cell to the relaxed
+    # smp.cell = AseAtomsAdaptor.get_atoms(r_supst)
     ase_atom_r = AseAtomsAdaptor.get_atoms(r_supst)
-    atoms_r = Atoms(symbols = ase_atom_r.symbols, scaled_positions = ase_atom_r.get_scaled_positions(),
-              cell = ase_atom_r.cell, pbc=True)
+    atoms_r = Atoms(
+        symbols=ase_atom_r.symbols,
+        scaled_positions=ase_atom_r.get_scaled_positions(),
+        cell=ase_atom_r.cell,
+        pbc=True,
+    )
     smp.cell = atoms_r
-    
-    #compute B in the single-supercell (1x1x1) using the relaxed structre
-    r_s_rlx = locfield(smp,'s',[1,1,1],radius)
-    
-    #B (B_dip+B_lor) vector with muon distortion effects in tesla (https://doi.org/10.1016/j.cpc.2022.108488)
-    B_DL = r_f_ps[0].T+ r_s_rlx[0].T - r_s_ps[0].T
 
+    # compute B in the single-supercell (1x1x1) using the relaxed structre
+    r_s_rlx = locfield(smp, "s", [1, 1, 1], radius)
 
-    return B_DL, B_DL + s_axis*cnt_field, np.linalg.norm(B_DL + s_axis*cnt_field,axis=0)
+    # B (B_dip+B_lor) vector with muon distortion effects in tesla (https://doi.org/10.1016/j.cpc.2022.108488)
+    B_DL = r_f_ps[0].T + r_s_rlx[0].T - r_s_ps[0].T
+
+    return (
+        B_DL,
+        B_DL + s_axis * cnt_field,
+        np.linalg.norm(B_DL + s_axis * cnt_field, axis=0),
+    )
