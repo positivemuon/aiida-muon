@@ -52,8 +52,8 @@ builder.qe.charge_supercell = orm.Bool(False)
 parser          = CifParser("data/Si.cif")
 smag1        = parser.get_structures(primitive = True)[0]
 aiida_structure2 = orm.StructureData(pymatgen = smag1)
-builder.qe.structure = aiida_structure2
-builder.qe.mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
+builder.structure = aiida_structure2
+builder.mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
 """
 
 
