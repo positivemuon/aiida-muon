@@ -459,6 +459,9 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
     Translates displacement due to the muon from one muon to a
     magnetically inequivalent site.
     Returns: Structure with translated displ and muon position
+
+    This function assumes that H is the particle of interest.
+    This is probably a problem when H atoms are already present.
     """
     tol = 0.0001
 
