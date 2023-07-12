@@ -530,7 +530,8 @@ def compute_dip_field(p_st, magm, sc_mat, r_supst, cnt_field):
     r_s_rlx = locfield(smp, "s", [1, 1, 1], radius)
 
     # B (B_dip+B_lor) vector with muon distortion effects in tesla (https://doi.org/10.1016/j.cpc.2022.108488)
-    B_DL = r_f_ps[0].T + r_s_rlx[0].T - r_s_ps[0].T
+    B_D = r_f_ps[0].D + r_s_rlx[0].D - r_s_ps[0].D
+    B_DL = B_D + r_f_ps[0].L
 
     return (
         B_DL,
