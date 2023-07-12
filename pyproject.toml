@@ -23,7 +23,11 @@ dependencies = [
     "aiida-core>=2.0,<3",
     "aiida-quantumespresso>=4.2.0",
     "aiida-pseudo",
-    "pymatgen"
+    "pymatgen",
+    "spglib>=1.9",
+    "pyyaml>=3.0",
+    "mulfc>=0.0.1",
+    "muesr"
 ]
 
 [project.urls]
