@@ -415,9 +415,9 @@ def load_workchain_data(data):
         enrg_list1.append(d["energy"])
 
     # get energy diff and convert to eV
-    ry2ev = 13.605698066
+    # ry2ev = 13.605698066
     e_min = min(enrg_list1)
-    enrg_list = [(enrg - e_min) * ry2ev for enrg in enrg_list1]
+    enrg_list = [(enrg - e_min) for enrg in enrg_list1]
 
     return np.array(idx_list), np.array(mu_list), np.array(enrg_list)
 

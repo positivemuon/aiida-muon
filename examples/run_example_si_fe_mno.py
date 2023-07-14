@@ -44,8 +44,8 @@ builder.qe.pw_code = code
 builder.qe.pp_code = pcode
 builder.qe.pseudofamily = orm.Str("SSSP/1.2/PBE/efficiency")
 builder.qe.k_dist = orm.Float(0.601)
-builder.qe.charge_supercell = orm.Bool(False)
-
+builder.qe.charged_supercell = orm.Bool(False)
+builder.qe.hubbard_u = orm.Bool(True)
 
 # uncomment below for Si
 """
@@ -58,7 +58,7 @@ builder.mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
 
 
 # uncomment below for Fe
-# """
+"""
 smag1 = Structure.from_file("data/Fe_bcc.mcif", primitive=False)
 aiida_structure = orm.StructureData(pymatgen=smag1)
 smag = aiida_structure.get_pymatgen_structure()
@@ -68,19 +68,19 @@ builder.structure = aiida_structure
 builder.qe.magmom = magmom
 builder.mu_spacing = orm.Float(0.75)  # for Fe  no primitive 4 mu sites
 ##builder.mu_spacing = orm.Float(0.6) #for Fe primitive 4 mu sites
-# """
+"""
 
 # uncomment below for MnO
-"""
-smag1 = Structure.from_file('data/MnO.mcif',primitive=True)
-aiida_structure = orm.StructureData(pymatgen = smag1)
+# """
+smag1 = Structure.from_file("data/MnO.mcif", primitive=True)
+aiida_structure = orm.StructureData(pymatgen=smag1)
 smag = aiida_structure.get_pymatgen_structure()
-magmoms = smag1.site_properties['magmom']
+magmoms = smag1.site_properties["magmom"]
 magmom = orm.List([list(magmom) for magmom in magmoms])
 builder.structure = aiida_structure
 builder.qe.magmom = magmom
-builder.mu_spacing = orm.Float(1.6) #for mno primitive 2 mu sites,  4 mno atoms
-"""
+builder.mu_spacing = orm.Float(1.6)  # for mno primitive 2 mu sites,  4 mno atoms
+# """
 
 
 pw_metadata = {

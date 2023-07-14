@@ -100,12 +100,20 @@ class FindMuonWorkChain(WorkChain):
         spec.input(
             "qe.k_dist",
             valid_type=orm.Float,
-            default=lambda: orm.Float(0.401),
+            default=lambda: orm.Float(0.301),
             help="The minimum desired distance in 1/Å between k-points in reciprocal space.",
         )
 
         spec.input(
-            "qe.charge_supercell",
+            "qe.hubbard_u",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(True),
+            required=False,
+            help="To check and get Hubbard U value or not",
+        )
+
+        spec.input(
+            "qe.charged_supercell",
             valid_type=orm.Bool,
             default=lambda: orm.Bool(True),
             required=False,
@@ -228,9 +236,12 @@ class FindMuonWorkChain(WorkChain):
             self.ctx.struct = self.inputs.structure
 
         # check and get hubbard u
-        inpt_st = self.ctx.struct.get_pymatgen_structure()
-        rst_u = check_get_hubbard_u_parms(inpt_st)
-        self.ctx.hubbardu_dict = rst_u
+        if self.inputs.qe.hubbard_u:
+            inpt_st = self.ctx.struct.get_pymatgen_structure()
+            rst_u = check_get_hubbard_u_parms(inpt_st)
+            self.ctx.hubbardu_dict = rst_u
+        else:
+            self.ctx.hubbardu_dict = None
 
     def get_initial_supercell_structures(self):
         """Get initial supercell+muon list"""
@@ -312,7 +323,7 @@ class FindMuonWorkChain(WorkChain):
         # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
         # overrides['base_final_scf']['pw']['metadata'] = recursive_merge(overrides['base_final_scf']['pw']['metadata'], {'description': 'Muon site calculations for '+self.inputs.structure.get_pymatgen_structure().formula})
 
-        if self.inputs.qe.charge_supercell:
+        if self.inputs.qe.charged_supercell:
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"tot_charge": 1.0}}
             )
@@ -403,10 +414,10 @@ class FindMuonWorkChain(WorkChain):
         # for key, workchain in self.ctx.workchains.items():
         #    if not workchain.is_finished_ok
 
+        n_notf = 0
         for i_index in range(len(supercell_list)):
             key = f"workchain_{i_index}"
             workchain = self.ctx[key]
-            self.ctx.n += 1
 
             # TODO:IMPLEMEMENT CHECKS FOR RESTART OF UNFINISHED CALCULATION
             #     AND/OR NUMBER OF UNCONVERGED CALC IS ACCEPTABLE
@@ -415,8 +426,12 @@ class FindMuonWorkChain(WorkChain):
                 self.report(
                     f"PwRelaxWorkChain failed with exit status {workchain.exit_status}"
                 )
-                return self.exit_codes.ERROR_RELAX_CALC_FAILED
+                n_notf += 1
+                # if failed calculation is more than 40%, then exit
+                if float(n_notf) / len(supercell_list) > 0.4:
+                    return self.exit_codes.ERROR_RELAX_CALC_FAILED
             else:
+                self.ctx.n += 1
                 uuid = workchain.uuid
                 energy = workchain.outputs.output_parameters.get_dict()["energy"]
                 rlx_structure = (
