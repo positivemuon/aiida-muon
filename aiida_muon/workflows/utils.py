@@ -1,21 +1,38 @@
 # -*- coding: utf-8 -*-
 import numpy as np
+from muesr.core import Sample
+from muesr.core.atoms import Atoms
+from muesr.engines.clfc import find_largest_sphere, locfield
 from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
+
+from pymatgen.symmetry import analyzer
+from pymatgen.util.coord import pbc_shortest_vectors
+from pymatgen.io.ase import AseAtomsAdaptor
+
 
 
 def get_collinear_mag_kindname(p_st, magm):
     """
     Using pymatgen structure and magmom properties, provides the kind name for
-    magnetic distinct species for spin polarized calculations with aiida-quantumespresso
+    magnetically distinct species for spin polarized calculations with aiida-QuantumESPRESSO.
 
-    Parm:
-        p_st: pymatgen structure instance
-        magm: corresponding magmom properties of the pymatgen structure instance
+    Parameters
+    ----------
+        p_st: pymatgen.core.Structure
+              Structure to be analyzed.
+
+        magm: list
+            corresponding magmom properties of the pymatgen structure instance.
+
+    Raises
+    ------
+        assertion error.
 
     Returns: the input pymatgen structure instance but with additional kind name property
              and a dict of the new distinct magnetic site specie and +-0.5 moment value.
+
 
     """
     assert p_st.num_sites == len(magm)
@@ -90,7 +107,22 @@ def get_collinear_mag_kindname(p_st, magm):
 
 def check_get_hubbard_u_parms(p_st):
     """Set Hubbard U parameters for each kind of specie
-    Returns: A dictionary of hubbard U species and their values
+
+    Parameters
+    ----------
+    p_st : pymatgen.core.Structure
+           Structure data to be analyzed.
+
+
+    Returns
+    -------
+    dict or None
+        A dictionary of hubbard U species and their values
+
+    suggestions:
+        1. should we return {} instead of None ?
+        2. should the list provided as input?
+        
     """
     # materials_project
     U_dict1 = {
@@ -125,11 +157,13 @@ def check_get_hubbard_u_parms(p_st):
         d_spc = list(set(spc))
 
     # 1 element compounds are not given any U values, 2 for the muon specie
-    if len(d_spc) > 2:
+    if len(d_spc) > 2: # TODO: is this correct? Is it really needed?
         hub_u = {}
         for spk in d_spc:
+            # remove numbers from species name
             spk2 = "".join(filter(str.isalpha, spk))
-            if spk2 in U_dict1:
+            # check is in the dictorionary
+            if spk2 in U_dict2:
                 hub_u[spk] = U_dict2[spk2]
         if hub_u:
             return hub_u
@@ -141,23 +175,51 @@ def check_get_hubbard_u_parms(p_st):
 
 ##########################################################################
 
-from pymatgen.symmetry import analyzer
-from pymatgen.util.coord import pbc_shortest_vectors
-
-# from pymatgen.electronic_structure.core import Magmom
-
 
 def find_equivalent_positions(
     frac_coords, host_lattice, atol=1e-3, energies=None, e_tol=0.05
 ):
     """
-    Returns eqivalent atoms list of
-    Energies and energy tolerance (e_tol) are in eV
+    Returns equivalent positions in a list of fractional coordinates given the
+    symmetry of host_lattice.
 
+    If energies are not passed, only a threshold on distance is considered.
+    Otherwise both conditions (distance and same energy) must be verified.
+
+    Parameters
+    ----------
+    frac_positions : numpy.array
+        The nAtoms x 3 array containing scaled atomic positions.
+
+    host_lattice : pymatgen.core.Structure
+        The lattice structure. Used to identify the symmetry operations of the lattice.
+
+    atol: float
+         Absolute tolerance (in Angstrom) for the interatimic distance used to
+         assume that two positions are the same.
+
+    energies: list or numpy.array
+         Energy (or any other scalar property) associated with positions
+         reported in frac_positions.
+
+    e_tol: float
+        Absolute difference between the scalar property associated with atomic sites.
+
+    Returns
+    -------
+    np.array
+        A list of integers.
+        If the value of the item equals its index, the atoms is equivalent to itself.
+        If the value equals the another index, the index of the equivalent atom is reported.
+
+    Suggestions:
+                 2. change `energies` into `scalar_value` to make it more general.
+    
     """
     '''
     Miki Bonacci: should be more compact.
     '''
+
 
     lattice = host_lattice.lattice
     # Bring to unit cell
@@ -200,7 +262,47 @@ def find_equivalent_positions(
 def prune_too_close_pos(
     frac_positions, host_lattice, min_distance, energies=None, e_tol=0.05
 ):
-    """Returns index of too close atoms"""
+    """
+    Returns index of atom too close to another one in the cell.
+
+    If energies are not passed, only inter-atomic distance is considered.
+    Otherwise both conditions (distance and same energy) must be verified.
+
+    Parameters
+    ----------
+    frac_positions : numpy.array
+        The nAtoms x 3 array containing scaled atomic positions.
+
+    host_lattice : pymatgen.core.Structure
+        The lattice structure. Only its lattice property is used.
+
+    min_distance: float
+         Minimum distance in Angstrom between atoms. Atoms closer than this
+         will be considered the same unless they have different energy associated.
+
+    energies: list or numpy.array
+         Energy (or any other scalar property) associated with positions
+         reported in frac_positions.
+
+    e_tol: float
+        Absolute difference between the scalar property associated with atomic sites.
+
+    Returns
+    -------
+    np.array
+        A list of integers.
+        If the value of the item equals its index, the atoms is not within
+        `min_distance` from others (or the energy threshold is not satisfied).
+        If the value is -1, the atom (and possibly the energy) is close to another
+        one in the cell.
+
+    Suggestions:
+                 1. modify -1 into the index of the first atom that matched the conditions
+                    on energy and distance.
+                 2. change `energies` into `scalar_value` to make it more general.
+    
+    """
+    
     # energies and tolerance should be in eV
     lattice = host_lattice.lattice
 
@@ -228,7 +330,24 @@ def prune_too_close_pos(
 def get_poslist1_not_in_list2(pos_lst1, pos_lst2, host_lattice, d_tol=0.5):
     """
     Function that compares two position list
-    and returns position of list1 not in list2
+    and returns position of pos_lst1 not in pos_lst2
+
+    Parameters
+    ----------
+    pos_lst1 : numpy.array (2D)
+               First set of scaled coordinates in the form [nat, 3]
+
+    pos_lst1 : numpy.array (2D)
+               Second set of scaled coordinates in the form [nat, 3]
+
+    host_lattice: pymatgen.core.Structure
+                  Used to access lattice class
+
+    d_tol: float
+           Absolute tolerance in Angstrom.
+    
+    
+    Suggestion: this can be obtained with prune_too_close_pos.
     """
     lattice = host_lattice.lattice
     s_idx = np.zeros(len(pos_lst1), dtype=np.int32) - 1
@@ -349,6 +468,9 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
     Translates displacement due to the muon from one muon to a
     magnetically inequivalent site.
     Returns: Structure with translated displ and muon position
+
+    This function assumes that H is the particle of interest.
+    This is probably a problem when H atoms are already present.
     """
     tol = 0.0001
 
@@ -414,9 +536,9 @@ def load_workchain_data(data):
         enrg_list1.append(d["energy"])
 
     # get energy diff and convert to eV
-    ry2ev = 13.605698066
+    # ry2ev = 13.605698066
     e_min = min(enrg_list1)
-    enrg_list = [(enrg - e_min) * ry2ev for enrg in enrg_list1]
+    enrg_list = [(enrg - e_min) for enrg in enrg_list1]
 
     return np.array(idx_list), np.array(mu_list), np.array(enrg_list)
 
@@ -431,3 +553,109 @@ def read_wrkc_output(outdata):
         enrgy = data[dd][1]
         out_dict.update({dd: [py_st, enrgy]})
     return out_dict
+
+
+def compute_dip_field(p_st, magm, sc_mat, r_supst, cnt_field):
+    """
+    Computes the dipolar contribution to the muon local field
+    using the MUESR code (10.7566/JPSCP.21.011052).
+
+    Parameters:
+    -----------
+        p_st: Input pymatgen structure instance
+        magm: corresponding magmom properties of the pymatgen structure instance
+        sc_mat: Input supercell matrix
+        r_supst: pymatgen  relaxed structure instance  with the muon position
+        cnt_field : DFT calculated contact field at the muon site in r_supst
+
+
+    Returns:
+    ---------
+        The B_dip+B_L vectors, its norm and B_Total=B_dip+B_L +B_C vectors
+
+    """
+
+    # set-up required parameters
+    assert p_st.num_sites == len(magm)
+
+    for i, m in enumerate(magm):
+        p_st[i].properties["magmom"] = Magmom(m)
+
+    p_scst = p_st.copy()
+    p_scst.make_supercell(sc_mat)
+
+    # center the supercell around the muon for no-PBC cases. muon at (0.5,0.5,0.5)
+    musite = r_supst.frac_coords[r_supst.atomic_numbers.index(1)]
+    # remove muon atom from cell
+    r_supst.remove_sites([r_supst.atomic_numbers.index(1)])
+    r_supst.translate_sites(
+        range(r_supst.num_sites), 0.5 - musite, frac_coords=True, to_unit_cell=True
+    )
+    p_scst.translate_sites(
+        range(p_scst.num_sites), 0.5 - musite, frac_coords=True, to_unit_cell=True
+    )
+
+    # Gen supercell fourier comp. mag moments in complex form
+    momt = p_scst.site_properties["magmom"]
+    fc_sup = np.zeros([len(momt), 3], dtype=complex)
+    for i, m in enumerate(momt):
+        # fc_sup[i] = m.get_moment_relative_to_crystal_axes(p_scst.lattice).astype(complex)
+        fc_sup[i] = m.get_moment().astype(complex)
+
+    # get the s_axis for transforming the contact field that is isotropic
+    s_axis = Magmom.get_suggested_saxis(momt)
+
+    # start dipolar calculations
+
+    smp = Sample()
+
+    # get structure from pymatgen-->ase_atoms-->Muesr_atoms
+    ase_atom = AseAtomsAdaptor.get_atoms(p_scst)
+    # smp.cell = ase_atom  #raise TypeError('Cell is invalid.') for MnO.mcif
+    atoms = Atoms(
+        symbols=ase_atom.symbols,
+        scaled_positions=ase_atom.get_scaled_positions(),
+        cell=ase_atom.cell,
+        pbc=True,
+    )
+    smp.cell = atoms
+
+    smp.new_mm()
+    smp.mm.k = np.array([0.0, 0.0, 0.0])
+    # smp.mm.fc_set(fc_sup, coord_system=2)
+    smp.mm.fc = fc_sup
+
+    # smp.add_muon(musite+0.5-musite)
+    smp.add_muon([0.5, 0.5, 0.5])
+    # smp.current_mm_idx=0
+    radius = find_largest_sphere(smp, [50, 50, 50])
+
+    # compute B in full(50x50x50 supercell) in the pristine structre
+    r_f_ps = locfield(smp, "s", [50, 50, 50], radius)
+
+    # compute B in the single-supercell (1x1x1) using the pristine structre
+    r_s_ps = locfield(smp, "s", [1, 1, 1], radius)
+
+    # change the cell to the relaxed
+    # smp.cell = AseAtomsAdaptor.get_atoms(r_supst)
+    ase_atom_r = AseAtomsAdaptor.get_atoms(r_supst)
+    atoms_r = Atoms(
+        symbols=ase_atom_r.symbols,
+        scaled_positions=ase_atom_r.get_scaled_positions(),
+        cell=ase_atom_r.cell,
+        pbc=True,
+    )
+    smp.cell = atoms_r
+
+    # compute B in the single-supercell (1x1x1) using the relaxed structre
+    r_s_rlx = locfield(smp, "s", [1, 1, 1], radius)
+
+    # B (B_dip+B_lor) vector with muon distortion effects in tesla (https://doi.org/10.1016/j.cpc.2022.108488)
+    B_D = r_f_ps[0].D + r_s_rlx[0].D - r_s_ps[0].D
+    B_DL = B_D + r_f_ps[0].L
+
+    return (
+        B_DL,
+        B_DL + s_axis * cnt_field,
+        np.linalg.norm(B_DL + s_axis * cnt_field, axis=0),
+    )

@@ -7,6 +7,7 @@ from aiida_quantumespresso.common.types import RelaxType
 from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 from aiida_quantumespresso.common.types import ElectronicType, RelaxType, SpinType
+from pymatgen.core import Structure
 from pymatgen.electronic_structure.core import Magmom
 from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
@@ -20,6 +21,7 @@ from .niche import Niche
 from .utils import (
     check_get_hubbard_u_parms,
     cluster_unique_sites,
+    compute_dip_field,
     get_collinear_mag_kindname,
     get_struct_wt_distortions,
     load_workchain_data,
@@ -107,8 +109,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         spec.input(
             "kpoints_distance",
             valid_type=orm.Float,
-            default=lambda: orm.Float(0.401),
+            default=lambda: orm.Float(0.301),
             help="The minimum desired distance in 1/Å between k-points in reciprocal space.",
+        )
+
+        spec.input(
+            "qe.hubbard_u",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(True),
+            required=False,
+            help="To check and get Hubbard U value or not",
         )
 
         spec.input(
@@ -212,8 +222,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             if_(cls.structure_is_magnetic)(
                 cls.run_final_scf_mu_origin,  # to be removed if better alternative
                 cls.compute_spin_density,
-                cls.inspect_get_contact_hperfine,
-                cls.set_hperfine_outputs,
+                cls.inspect_get_contact_hyperfine,
+                cls.get_dipolar_field,
+                cls.set_hyperfine_outputs,
             ),
             cls.set_relaxed_muon_outputs,
         )
@@ -556,6 +567,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         return
             
 
+        spec.output(
+            "unique_sites_dipolar", valid_type=orm.List, required=False
+        )  # return only when magnetic
+
     def get_initial_muon_sites(self):
         """get list of starting muon sites"""
 
@@ -600,9 +615,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             self.ctx.struct = self.inputs.structure
 
         # check and get hubbard u
-        inpt_st = self.ctx.struct.get_pymatgen_structure()
-        rst_u = check_get_hubbard_u_parms(inpt_st)
-        self.ctx.hubbardu_dict = rst_u
+        if self.inputs.qe.hubbard_u:
+            inpt_st = self.ctx.struct.get_pymatgen_structure()
+            rst_u = check_get_hubbard_u_parms(inpt_st)
+            self.ctx.hubbardu_dict = rst_u
+        else:
+            self.ctx.hubbardu_dict = None
 
     def get_initial_supercell_structures(self):
         """Get initial supercell+muon list"""
@@ -670,6 +688,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             },
         )
         if self.inputs.charge_supercell:
+        #
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'CONTROL':{'nstep': 200}})
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'smearing': 'gaussian'}})
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'electron_maxstep': 300}})
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'mixing_beta': 0.30}})
+        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
+        # overrides['base_final_scf']['pw']['metadata'] = recursive_merge(overrides['base_final_scf']['pw']['metadata'], {'description': 'Muon site calculations for '+self.inputs.structure.get_pymatgen_structure().formula})
+
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"tot_charge": 1.0}}
             )
@@ -766,10 +792,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # for key, workchain in self.ctx.workchains.items():
         #    if not workchain.is_finished_ok
 
+        n_notf = 0
         for i_index in range(len(supercell_list)):
             key = f"workchain_{i_index}"
             workchain = self.ctx[key]
-            self.ctx.n += 1
 
             # TODO:IMPLEMEMENT CHECKS FOR RESTART OF UNFINISHED CALCULATION
             #     AND/OR NUMBER OF UNCONVERGED CALC IS ACCEPTABLE
@@ -778,8 +804,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 self.report(
                     f"PwRelaxWorkChain failed with exit status {workchain.exit_status}"
                 )
-                return self.exit_codes.ERROR_RELAX_CALC_FAILED
+                n_notf += 1
+                # if failed calculation is more than 40%, then exit
+                if float(n_notf) / len(supercell_list) > 0.4:
+                    return self.exit_codes.ERROR_RELAX_CALC_FAILED
             else:
+                self.ctx.n += 1
                 uuid = workchain.uuid
                 energy = workchain.outputs.output_parameters.get_dict()["energy"]
                 rlx_structure = (
@@ -918,6 +948,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if hasattr(self.inputs,"pp_metadata"):
             pp_builder.metadata = self.inputs.pp_metadata.get_dict()
 
+
         parameters = orm.Dict(
             dict={
                 "INPUTPP": {
@@ -966,7 +997,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 )
                 self.to_context(**{pkey: pp_future})
 
-    def inspect_get_contact_hperfine(self):
+    def inspect_get_contact_hyperfine(self):
         """compute spin density at unique candidate sites"""
         self.report("Getting Contact field")
         unique_cluster_list = self.ctx.unique_cluster
@@ -997,11 +1028,45 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.cont_hf = orm.Dict(dict=chf_dict)
         # print("contact_results ",chf_dict)
 
-    def set_hperfine_outputs(self):
+    def get_dipolar_field(self):
+        unique_cluster_list = self.ctx.unique_cluster
+        cnt_field_dict = self.ctx.cont_hf.get_dict()
+        dip_results = []
+        for j_index, clus in enumerate(unique_cluster_list):
+            #
+            # rlx_st = clus['rlxd_struct']
+            rlx_st = Structure.from_dict(clus["rlxd_struct"])
+            rlx_struct = orm.StructureData(pymatgen=rlx_st)
+            cnt_field = cnt_field_dict[str(clus["idx"])][1]
+            print(cnt_field)
+            b_field = compute_dipolar_field(
+                self.inputs.structure,
+                self.inputs.qe.magmom,
+                self.inputs.sc_matrix[0],
+                rlx_struct,
+                orm.Float(cnt_field),
+            )
+            # dip_results.update({str(clus['idx']):[b_field[0][0], b_field[0][1], b_field[0][2]]})  #as dict
+            dip_results.append(
+                (
+                    {
+                        "idx": clus["idx"],
+                        "Bdip": b_field[0][0],
+                        "B_T": b_field[0][1],
+                        "B_T_norm": b_field[0][2],
+                    }
+                )
+            )
+
+        self.ctx.dipolar_dict = orm.List(dip_results)
+        print("dipolar_results ", dip_results)
+
+    def set_hyperfine_outputs(self):
         """outputs"""
         self.report("Setting hypferfine Outputs")
         # self.out('unique_sites_hyperfine', get_list(self.ctx.cont_hf))
         self.out("unique_sites_hyperfine", self.ctx.cont_hf)
+        self.out("unique_sites_dipolar", self.ctx.dipolar_dict)
 
     def set_relaxed_muon_outputs(self):
         """outputs"""
@@ -1202,3 +1267,23 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
     assert len(clus_pos) == len(uniq_clus_pos)
 
     return {"unique_pos": uniq_clus_pos, "mag_inequivalent": nw_stc_calc}
+
+
+@calcfunction
+def compute_dipolar_field(
+    p_st: orm.StructureData,
+    magmm: orm.List,
+    sc_matr: orm.List,
+    r_supst: orm.StructureData,
+    cnt_field: orm.Float,
+):
+    """
+    This calcfunction calls the compute dipolar field
+    """
+
+    pmg_st = p_st.get_pymatgen_structure()
+    r_sup = r_supst.get_pymatgen_structure()
+
+    b_fld = compute_dip_field(pmg_st, magmm, sc_matr, r_sup, cnt_field.value)
+
+    return orm.List([b_fld])
