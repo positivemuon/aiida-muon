@@ -31,10 +31,10 @@ scmat_node = orm.List(
 
 
 # EDIT PW AND PP CODE TO SUIT YOURS
-codename = "pw7_0@localhost_serial1"  # edit to user
+codename = "pw-qe-7.1@MPC3129"  # edit to user
 code = orm.Code.get_from_string(codename)
 
-pcodename = "pp7_0@localhost_serial1"  # edit to user
+pcodename = "pp-qe-7.1@MPC3129"  # edit to user
 pcode = orm.Code.get_from_string(pcodename)
 
 
