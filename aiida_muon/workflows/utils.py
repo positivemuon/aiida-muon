@@ -6,20 +6,33 @@ from muesr.engines.clfc import find_largest_sphere, locfield
 from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
+
+from pymatgen.symmetry import analyzer
+from pymatgen.util.coord import pbc_shortest_vectors
 from pymatgen.io.ase import AseAtomsAdaptor
+
 
 
 def get_collinear_mag_kindname(p_st, magm):
     """
     Using pymatgen structure and magmom properties, provides the kind name for
-    magnetic ditinct species for spin polarized caculations with aiida-quntum espresso
+    magnetically distinct species for spin polarized calculations with aiida-QuantumESPRESSO.
 
-    Parm:
-        p_st: pymatgen structure instance
-        magm: corresponding magmom properties of the pymatgen structure instance
+    Parameters
+    ----------
+        p_st: pymatgen.core.Structure
+              Structure to be analyzed.
+
+        magm: list
+            corresponding magmom properties of the pymatgen structure instance.
+
+    Raises
+    ------
+        assertion error.
 
     Returns: the input pymatgen structure instance but with additional kind name property
              and a dict of the new distinct magnetic site specie and +-0.5 moment value.
+
 
     """
     assert p_st.num_sites == len(magm)
@@ -94,7 +107,22 @@ def get_collinear_mag_kindname(p_st, magm):
 
 def check_get_hubbard_u_parms(p_st):
     """Set Hubbard U parameters for each kind of specie
-    Returns: A dictionary of hubbard U species and their values
+
+    Parameters
+    ----------
+    p_st : pymatgen.core.Structure
+           Structure data to be analyzed.
+
+
+    Returns
+    -------
+    dict or None
+        A dictionary of hubbard U species and their values
+
+    suggestions:
+        1. should we return {} instead of None ?
+        2. should the list provided as input?
+        
     """
     # materials_project
     U_dict1 = {
@@ -129,10 +157,12 @@ def check_get_hubbard_u_parms(p_st):
         d_spc = list(set(spc))
 
     # 1 element compounds are not given any U values, 2 for the muon specie
-    if len(d_spc) > 2:
+    if len(d_spc) > 2: # TODO: is this correct? Is it really needed?
         hub_u = {}
         for spk in d_spc:
+            # remove numbers from species name
             spk2 = "".join(filter(str.isalpha, spk))
+            # check is in the dictorionary
             if spk2 in U_dict2:
                 hub_u[spk] = U_dict2[spk2]
         if hub_u:
@@ -145,20 +175,48 @@ def check_get_hubbard_u_parms(p_st):
 
 ##########################################################################
 
-from pymatgen.symmetry import analyzer
-from pymatgen.util.coord import pbc_shortest_vectors
-
-# from pymatgen.electronic_structure.core import Magmom
-
 
 def find_equivalent_positions(
     frac_coords, host_lattice, atol=1e-3, energies=None, e_tol=0.05
 ):
     """
-    Returns eqivalent atoms list of
-    Energies and energy tolerance (e_tol) are in eV
+    Returns equivalent positions in a list of fractional coordinates given the
+    symmetry of host_lattice.
 
+    If energies are not passed, only a threshold on distance is considered.
+    Otherwise both conditions (distance and same energy) must be verified.
+
+    Parameters
+    ----------
+    frac_positions : numpy.array
+        The nAtoms x 3 array containing scaled atomic positions.
+
+    host_lattice : pymatgen.core.Structure
+        The lattice structure. Used to identify the symmetry operations of the lattice.
+
+    atol: float
+         Absolute tolerance (in Angstrom) for the interatimic distance used to
+         assume that two positions are the same.
+
+    energies: list or numpy.array
+         Energy (or any other scalar property) associated with positions
+         reported in frac_positions.
+
+    e_tol: float
+        Absolute difference between the scalar property associated with atomic sites.
+
+    Returns
+    -------
+    np.array
+        A list of integers.
+        If the value of the item equals its index, the atoms is equivalent to itself.
+        If the value equals the another index, the index of the equivalent atom is reported.
+
+    Suggestions:
+                 2. change `energies` into `scalar_value` to make it more general.
+    
     """
+
 
     lattice = host_lattice.lattice
     # Bring to unit cell
@@ -201,7 +259,47 @@ def find_equivalent_positions(
 def prune_too_close_pos(
     frac_positions, host_lattice, min_distance, energies=None, e_tol=0.05
 ):
-    """Returns index of too close atoms"""
+    """
+    Returns index of atom too close to another one in the cell.
+
+    If energies are not passed, only inter-atomic distance is considered.
+    Otherwise both conditions (distance and same energy) must be verified.
+
+    Parameters
+    ----------
+    frac_positions : numpy.array
+        The nAtoms x 3 array containing scaled atomic positions.
+
+    host_lattice : pymatgen.core.Structure
+        The lattice structure. Only its lattice property is used.
+
+    min_distance: float
+         Minimum distance in Angstrom between atoms. Atoms closer than this
+         will be considered the same unless they have different energy associated.
+
+    energies: list or numpy.array
+         Energy (or any other scalar property) associated with positions
+         reported in frac_positions.
+
+    e_tol: float
+        Absolute difference between the scalar property associated with atomic sites.
+
+    Returns
+    -------
+    np.array
+        A list of integers.
+        If the value of the item equals its index, the atoms is not within
+        `min_distance` from others (or the energy threshold is not satisfied).
+        If the value is -1, the atom (and possibly the energy) is close to another
+        one in the cell.
+
+    Suggestions:
+                 1. modify -1 into the index of the first atom that matched the conditions
+                    on energy and distance.
+                 2. change `energies` into `scalar_value` to make it more general.
+    
+    """
+    
     # energies and tolerance should be in eV
     lattice = host_lattice.lattice
 
@@ -229,7 +327,24 @@ def prune_too_close_pos(
 def get_poslist1_not_in_list2(pos_lst1, pos_lst2, host_lattice, d_tol=0.5):
     """
     Function that compares two position list
-    and returns position of list1 not in list2
+    and returns position of pos_lst1 not in pos_lst2
+
+    Parameters
+    ----------
+    pos_lst1 : numpy.array (2D)
+               First set of scaled coordinates in the form [nat, 3]
+
+    pos_lst1 : numpy.array (2D)
+               Second set of scaled coordinates in the form [nat, 3]
+
+    host_lattice: pymatgen.core.Structure
+                  Used to access lattice class
+
+    d_tol: float
+           Absolute tolerance in Angstrom.
+    
+    
+    Suggestion: this can be obtained with prune_too_close_pos.
     """
     lattice = host_lattice.lattice
     s_idx = np.zeros(len(pos_lst1), dtype=np.int32) - 1
@@ -350,6 +465,9 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
     Translates displacement due to the muon from one muon to a
     magnetically inequivalent site.
     Returns: Structure with translated displ and muon position
+
+    This function assumes that H is the particle of interest.
+    This is probably a problem when H atoms are already present.
     """
     tol = 0.0001
 
