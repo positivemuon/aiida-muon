@@ -13,7 +13,7 @@ from pymatgen.io.ase import AseAtomsAdaptor
 
 
 
-def get_collinear_mag_kindname(p_st, magm):
+def get_collinear_mag_kindname(p_st, magm, half=True):
     """
     Using pymatgen structure and magmom properties, provides the kind name for
     magnetically distinct species for spin polarized calculations with aiida-QuantumESPRESSO.
@@ -95,8 +95,10 @@ def get_collinear_mag_kindname(p_st, magm):
     for k in mgek.keys():
         for idx in mgek[k].keys():
             spin = mgek[k][idx]
-            mgek[k][idx] = round(spin * (0.5 / abs(spin)), 1)
-
+            if half:
+                mgek[k][idx] = round(spin * (0.5 / abs(spin)), 1)
+            else:
+                mgek[k][idx] = round(spin, 1)
     start_mag_dict = {}
     for val in mgek.values():
         start_mag_dict.update(val)
