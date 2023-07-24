@@ -76,9 +76,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         spec.input(
             "mag_dict",
-            valid_type=dict,
+            valid_type=orm.Dict,
             required=False,
-            non_db=True,
+            #non_db=True,
             help="magnetic dict created in protocols.",
         )
 
@@ -152,7 +152,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #to run final scf
         spec.expose_inputs(
             PwBaseWorkChain,
-            namespace="pwscf",
+            namespace_options={
+                'required': False, 
+                'populate_defaults': False,
+                'help': 'Inputs for final SCF calculation with the muon at the origin.',
+            },
             exclude=("pw.structure", "kpoints"),
         )  # 
         
@@ -194,7 +198,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             namespace="musconv",
             exclude=("structure", "pseudos",),
             namespace_options={
-                'required': False, 
+                'required': False, 'populate_defaults': False,
                 'help': 'the preprocess MusconvWorkChain step, if needed.',
             },
         )  # use the  pw calcjob
@@ -264,6 +268,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         spec.output(
             "unique_sites_hyperfine", valid_type=orm.Dict, required=False
+        )  # return only when magnetic
+        
+        spec.output(
+            "unique_sites_dipolar", valid_type=orm.List, required=False
         )  # return only when magnetic
         
         
@@ -371,11 +379,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             structure = rst_mg["struct_magkind"]
             start_mg_dict = rst_mg["start_mag_dict"]
             
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"], {"SYSTEM": {"nspin": 2}}
+            _overrides["base"]["pw"]["parameters"] = recursive_merge(
+                _overrides["base"]["pw"]["parameters"], {"SYSTEM": {"nspin": 2}}
             )
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"],
+            _overrides["base"]["pw"]["parameters"] = recursive_merge(
+                _overrides["base"]["pw"]["parameters"],
                 {
                     "SYSTEM": {
                         "starting_magnetization": start_mg_dict.get_dict()
@@ -411,11 +419,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 pw_code = pw_code,
                 structure = structure,
                 relax_type=relax_type_musconv,
+                pseudo_family=pseudo_family,
                 )
         
         builder_musconv.pop('structure', None)
         
         #### PwRelax
+        if relax_type != RelaxType.POSITIONS:
+                raise ValueError(f'The only accepted relax_type parameter is "RelaxType.POSITIONS". You selected "{relax_type}", which is currently forbidden.')
         builder_relax = PwRelaxWorkChain.get_builder_from_protocol(
                 pw_code,
                 structure,
@@ -456,6 +467,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.mu_spacing=orm.Float(mu_spacing)
         builder.charge_supercell=orm.Bool(charge_supercell)
         
+        #useful to be used in overrides in the workflow. to be removed when new StructureData
         if magmom: builder.mag_dict = start_mg_dict
         
         builder.structure = structure
@@ -566,10 +578,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             
         return
             
-
-        spec.output(
-            "unique_sites_dipolar", valid_type=orm.List, required=False
-        )  # return only when magnetic
 
     def get_initial_muon_sites(self):
         """get list of starting muon sites"""
@@ -755,6 +763,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             inputs = recursive_merge(self.ctx.overrides,inputs)
             inputs["clean_workdir"] = self.ctx.overrides.pop("clean_workdir",orm.Bool(True))
             inputs = prepare_process_inputs(PwRelaxWorkChain, inputs)
+            
+        if not "kpoints_distance" in inputs.base:
+            inputs.base.kpoints_distance = self.inputs.kpoints_distance
         
         for i_index in range(len(supercell_list)):
                         
@@ -903,7 +914,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             
             inputs = recursive_merge(self.ctx.overrides["base"],inputs)
             inputs["clean_workdir"] = self.ctx.overrides.pop("clean_workdir",orm.Bool(False))
-            inputs = prepare_process_inputs(PwRelaxWorkChain, inputs)
+            inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
+            
+        if not "kpoints_distance" in inputs:
+            inputs.kpoints_distance = self.inputs.kpoints_distance
         
         for j_index, clus in enumerate(unique_cluster_list):
             #
