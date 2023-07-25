@@ -82,15 +82,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             help="magnetic dict created in protocols.",
         )
 
-
-        """spec.input(
-            "pw_code",
-            valid_type=orm.Code,
-            required=True,
-            help="The pw.x code-computer for dft the calculations",
-        )
-        """
-        
         spec.input(
             "pp_code",
             valid_type=orm.Code,
@@ -152,6 +143,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #to run final scf
         spec.expose_inputs(
             PwBaseWorkChain,
+            namespace="pwscf",
             namespace_options={
                 'required': False, 
                 'populate_defaults': False,
@@ -202,11 +194,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 'help': 'the preprocess MusconvWorkChain step, if needed.',
             },
         )  # use the  pw calcjob
-
+        
+        spec.inputs.validator = recursive_consistency_check
+        
         spec.outline(
-            if_(cls.not_converged_supercell)(     #MB
-                cls.converge_supercell,           #MB
-                cls.check_supercell_convergence,           #MB
+            if_(cls.not_converged_supercell)(     
+                cls.converge_supercell,         
+                cls.check_supercell_convergence,          
             ),
             cls.setup,
             cls.get_initial_muon_sites,
@@ -214,7 +208,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.setup_magnetic_hubbardu_dict,
             ),
             cls.get_initial_supercell_structures,
-            #cls.setup_pw_overrides,
+            #cls.setup_pw_overrides,   TODO step done as input validator
             cls.compute_supercell_structures,
             cls.collect_relaxed_structures,
             cls.analyze_relaxed_structures,
@@ -282,11 +276,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         structure,
         protocol=None,
         overrides={},
-        electronic_type=ElectronicType.METAL,
-        spin_type=SpinType.NONE,
-        relax_type=RelaxType.POSITIONS,
-        relax_type_musconv=None,
-        initial_magnetic_moments=None,
+        relax_musconv=False,
         magmom=None,
         options=None,
         sc_matrix=None,
@@ -303,12 +293,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         :param structure: the ``StructureData`` instance to use.
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
-        :param electronic_type: indicate the electronic character of the system through ``ElectronicType`` instance.
-        :param spin_type: indicate the spin polarization type to use through a ``SpinType`` instance.
-        :param initial_magnetic_moments: optional dictionary that maps the initial magnetic moment of each kind to a
-            desired value for a spin polarized calculation. Note that in case the ``starting_magnetization`` is also
-            provided in the ``overrides``, this takes precedence over the values provided here. In case neither is
-            provided and ``spin_type == SpinType.COLLINEAR``, an initial guess for the magnetic moments is used.
         :param options: A dictionary of options that will be recursively set for the ``metadata.options`` input of all
             the ``CalcJobs`` that are nested in this work chain.
         :param sc_matrix: List of length 1 for supercell size.
@@ -319,98 +303,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         :return: a process builder instance with all inputs defined ready for launch.
         """
         
-        from aiida_quantumespresso.workflows.protocols.utils import get_starting_magnetization, recursive_merge
+        from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 
-        
-    
-        #set overrides (here named _overrides)... there is, below, a recursive merge with the user defined overrides.
-        _overrides = {
-            "base": {
-                "kpoints_distance": kpoints_distance,
-                "pw": {
-                    "parameters": {
-                "CONTROL": {
-                    "nstep": 200
-                    },
-                "SYSTEM":{},
-                "ELECTRONS": {
-                    "electron_maxstep": 300,
-                    "mixing_beta": 0.30,
-                    },
-                },
-                    "metadata": {
-                    "description": "Muon site calculations for "
-                    + structure.get_pymatgen_structure().formula
-                },
-
-                },
-            },
-            "base_final_scf": {},
-            "clean_workdir": orm.Bool(True),
-        }
-
-        if charge_supercell:
-            _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
-            _overrides["base"]["pw"]["parameters"]["SYSTEM"]["occupations"] = "smearing"
-            _overrides["base"]["pw"]["parameters"]["SYSTEM"]["smearing"] = "cold"
-            _overrides["base"]["pw"]["parameters"]["SYSTEM"]["degauss"] = 0.01
-
-        
-        # MAGMOMS
-        #MB this should be automatically done in the new implementation with the MagneticStructureData.
-        #TOTEST: BUT I think is done automatically also here, providing the "initial_magnetic_moments" input.
-        '''if initial_magnetic_moments and start_mg_dict:
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"], {"SYSTEM": {"nspin": 2}}
-            )
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"],
-                {
-                    "SYSTEM": {
-                        "starting_magnetization": start_mg_dict.get_dict()
-                    }
-                },
-            )'''
-        
-        if magmom:
-            rst_mg = make_collinear_getmag_kind(
-                structure, magmom,
-            )
-            structure = rst_mg["struct_magkind"]
-            start_mg_dict = rst_mg["start_mag_dict"]
-            
-            _overrides["base"]["pw"]["parameters"] = recursive_merge(
-                _overrides["base"]["pw"]["parameters"], {"SYSTEM": {"nspin": 2}}
-            )
-            _overrides["base"]["pw"]["parameters"] = recursive_merge(
-                _overrides["base"]["pw"]["parameters"],
-                {
-                    "SYSTEM": {
-                        "starting_magnetization": start_mg_dict.get_dict()
-                    }
-                },
-            )
-            
-    
-
-        # HUBBARD
-        # check and assign hubbard u
-        # MB this should be automatically done in the new implementation, at least at the protocol generation level.
-        # or at least in a different way when considering the HubbardStructureData.
-        #FROM: cls.setup_magnetic_hubbardu_dict,
-        # get the magnetic kind relevant for pw spin-polarization setup
-        #MB this should be automatically done in the new implementation with the MagneticStructureData.
-        #TOTEST: BUT I think is done automatically also here, providing the "initial_magnetic_moments" input.
-        # check and get hubbard u
-        inpt_st = structure.get_pymatgen_structure()
-        ##TO DO:put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard. MB: "is it needed also now?"
-        rst_u = check_get_hubbard_u_parms(inpt_st)
-        hubbardu_dict = rst_u 
-        if hubbardu_dict:
-            _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u"] = True
-            _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u_kind"] = 0
-            _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict
-            
+        _overrides, start_mg_dict = get_override_dict(structure, kpoints_distance, charge_supercell, magmom)
         
         overrides = recursive_merge(overrides,_overrides)
         
@@ -418,25 +313,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder_musconv = MusconvWorkChain.get_builder_from_protocol(
                 pw_code = pw_code,
                 structure = structure,
-                relax_type=relax_type_musconv,
                 pseudo_family=pseudo_family,
                 )
         
         builder_musconv.pop('structure', None)
         
         #### PwRelax
-        if relax_type != RelaxType.POSITIONS:
-                raise ValueError(f'The only accepted relax_type parameter is "RelaxType.POSITIONS". You selected "{relax_type}", which is currently forbidden.')
         builder_relax = PwRelaxWorkChain.get_builder_from_protocol(
                 pw_code,
                 structure,
                 protocol=protocol,
                 overrides=overrides,
-                electronic_type=electronic_type,
-                spin_type=spin_type,
-                initial_magnetic_moments=initial_magnetic_moments,
                 pseudo_family=pseudo_family,
-                relax_type=relax_type,
+                relax_type=RelaxType.POSITIONS,
                 **kwargs,
                 )
         
@@ -449,9 +338,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 structure,
                 protocol=protocol,
                 overrides=overrides["base"],
-                electronic_type=electronic_type,
-                spin_type=spin_type,
-                initial_magnetic_moments=initial_magnetic_moments,
                 pseudo_family=pseudo_family,
                 **kwargs,
                 )
@@ -466,9 +352,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if sc_matrix: builder.sc_matrix=orm.List(sc_matrix)
         builder.mu_spacing=orm.Float(mu_spacing)
         builder.charge_supercell=orm.Bool(charge_supercell)
+        builder.kpoints_distance = orm.Float(kpoints_distance)
         
         #useful to be used in overrides in the workflow. to be removed when new StructureData
-        if magmom: builder.mag_dict = start_mg_dict
+        if start_mg_dict: 
+            builder.magmom = magmom
+            builder.mag_dict = start_mg_dict
         
         builder.structure = structure
         builder.pseudo_family = orm.Str(pseudo_family)
@@ -478,7 +367,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.pwscf = builder_pwscf
         builder.relax = builder_relax
         
-        if not relax_type_musconv: builder.musconv.pop('relax')
+        if not relax_musconv: builder.musconv.pop('relax')
         
         
         #MB: 
@@ -893,7 +782,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # return self.inputs.magmom is not None
         # return 'magmom' in self.inputs
         if "magmom" in self.inputs:
-            return True
+            return self.inputs.magmom is not None
         else:
             return False
 
@@ -1301,3 +1190,122 @@ def compute_dipolar_field(
     b_fld = compute_dip_field(pmg_st, magmm, sc_matr, r_sup, cnt_field.value)
 
     return orm.List([b_fld])
+
+
+#Creates the _overrides used in the protocols and in the forcing inputs step.
+def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
+    _overrides = {
+            "base": {
+                "kpoints_distance": kpoints_distance,
+                "pw": {
+                    "parameters": {
+                "CONTROL": {
+                    "nstep": 200
+                    },
+                "SYSTEM":{},
+                "ELECTRONS": {
+                    "electron_maxstep": 300,
+                    "mixing_beta": 0.30,
+                    "occupations": "smearing",
+                    "smearing": "gaussian",
+                    "degauss": 0.01,
+                },
+                },
+                    "metadata": {
+                    "description": "Muon site calculations for "
+                    + structure.get_pymatgen_structure().formula
+                },
+                },
+            },
+            "base_final_scf": {},
+            "clean_workdir": orm.Bool(True),
+        }
+
+    if charge_supercell:
+        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
+        
+    # MAGMOMS       
+    if magmom:
+        rst_mg = make_collinear_getmag_kind(
+            structure, magmom,
+        )
+        structure = rst_mg["struct_magkind"]
+        start_mg_dict = rst_mg["start_mag_dict"]
+        
+        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["nspin"]= 2
+        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["starting_magnetization"] = start_mg_dict.get_dict()
+    else:
+        start_mg_dict = None
+    # HUBBARD
+    # check and assign hubbard u
+    inpt_st = structure.get_pymatgen_structure()
+    ##TO DO:put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard.
+    rst_u = check_get_hubbard_u_parms(inpt_st)
+    hubbardu_dict = rst_u 
+    if hubbardu_dict:
+        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u"] = True
+        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u_kind"] = 0
+        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict
+        
+    return _overrides, start_mg_dict
+
+
+def iterdict(d,key):
+  value = None
+  for k,v in d.items():
+    if isinstance(v, dict):
+        value = iterdict(v,key)
+    else:            
+        if k == key:
+          return v
+    if value: return value
+
+
+def recursive_consistency_check(input_dict):
+    import copy
+    
+    """Validation of the inputs provided for the FindMuonWorkChain.
+    """
+    
+    parameters = copy.deepcopy(input_dict)
+    _overrides, start_mg_dict = get_override_dict(parameters["structure"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None))
+    
+    keys = ["tot_charge","nspin","occupations","smearing"]
+    
+    wrong_inputs_relax = []
+    wrong_inputs_pwscf = []
+    
+    unconsistency_sentence = ''
+    
+    if 'base_final_scf' in parameters['relax']:
+        if parameters['relax']['base_final_scf'] ==  {'metadata': {}, 'pw': {'metadata': {'options': {'stash': {}}}, 'monitors': {}, 'pseudos': {}}}:
+            pass
+        elif parameters['relax']['base_final_scf'] ==  {}:
+            pass
+        else:
+            unconsistency_sentence+=f'Checking inputs.relax.base_final_scf: should not be set, the final scf after relaxation is not supported in the FindMuonWorkChain.'
+    
+    
+    for key in keys:
+        value_input_relax = iterdict(parameters["relax"]["base"]["pw"]["parameters"].get_dict(),key)
+        value_input_pwscf = iterdict(parameters["pwscf"]["pw"]["parameters"].get_dict(),key)
+        value_overrides = iterdict(_overrides,key)
+        #print(value_input_relax,value_input_pwscf,value_overrides)
+        if value_input_relax != value_overrides:
+            if value_input_relax in [0, None] and value_overrides in [0, None]:
+                continue # 0 is None and viceversa
+            wrong_inputs_relax.append(key)
+            unconsistency_sentence += f'Checking inputs.relax.base.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_relax}", but only "{value_overrides}" is consistent with your settings.\n'
+        if value_input_pwscf != value_overrides:
+            if key == "nspin" and value_input_pwscf == 2: 
+                continue
+            if value_input_pwscf in [0, None] and value_overrides in [0, None]:
+                continue # 0 is None and viceversa
+            wrong_inputs_pwscf.append(key)
+            unconsistency_sentence += f'Checking inputs.pwscf.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_pwscf}", but only "{value_overrides}" is consistent with your settings.\n'
+    
+    if len(wrong_inputs_relax+wrong_inputs_pwscf)>0:
+        raise ValueError('\n'+unconsistency_sentence+'\n Please check the inputs of your FindMuonWorkChain instance or use "get_builder_from_protocol()" method to populate correctly the inputs.')
+
+                      
+    return 
