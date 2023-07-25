@@ -13,9 +13,9 @@ from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 
 
-
 #MB
 from aiida_musconv.workflows.musconv import MusconvWorkChain
+from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
 
 from .niche import Niche
 from .utils import (
@@ -251,6 +251,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             message="One of the PPWorkChain subprocesses failed",
         )
 
+        spec.exit_code(
+            407,
+            "ERROR_NO_SUPERCELLS",
+            message="No supercells available: try to decrease mu_spacing.",
+        )
+
         # TODO: more exit codes catch errors and throw exit codes
         #MB add exit code for the musconv.
 
@@ -304,19 +310,33 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
-
-        _overrides, start_mg_dict = get_override_dict(structure, kpoints_distance, charge_supercell, magmom)
+        import copy
+        
+        _overrides, start_mg_dict, structure = get_override_dict(structure, kpoints_distance, charge_supercell, magmom)
         
         overrides = recursive_merge(overrides,_overrides)
+        print(overrides) 
         
         #### Musconv
         builder_musconv = MusconvWorkChain.get_builder_from_protocol(
                 pw_code = pw_code,
                 structure = structure,
                 pseudo_family=pseudo_family,
+                relax_unitcell=relax_musconv,
                 )
         
         builder_musconv.pop('structure', None)
+        
+        #### simple PwBase for final scf mu-origin
+        builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
+                pw_code,
+                structure,
+                protocol=protocol,
+                overrides=overrides.get("base",None),
+                pseudo_family=pseudo_family,
+                **kwargs,
+                )
+        
         
         #### PwRelax
         builder_relax = PwRelaxWorkChain.get_builder_from_protocol(
@@ -332,32 +352,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder_relax.pop('structure', None)
         builder_relax.pop('base_final_scf', None)
         
-        #### simple PwBase
-        builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
-                pw_code,
-                structure,
-                protocol=protocol,
-                overrides=overrides["base"],
-                pseudo_family=pseudo_family,
-                **kwargs,
-                )
-        
         builder_pwscf['pw'].pop('structure', None)
         builder_pwscf.pop('kpoints_distance', None)       
         
         #### Builder
         builder = cls.get_builder()
-        
-        #we can set this also wrt to some protocol, TOBE discussed
-        if sc_matrix: builder.sc_matrix=orm.List(sc_matrix)
-        builder.mu_spacing=orm.Float(mu_spacing)
-        builder.charge_supercell=orm.Bool(charge_supercell)
-        builder.kpoints_distance = orm.Float(kpoints_distance)
-        
-        #useful to be used in overrides in the workflow. to be removed when new StructureData
-        if start_mg_dict: 
-            builder.magmom = magmom
-            builder.mag_dict = start_mg_dict
         
         builder.structure = structure
         builder.pseudo_family = orm.Str(pseudo_family)
@@ -368,6 +367,21 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.relax = builder_relax
         
         if not relax_musconv: builder.musconv.pop('relax')
+        
+        #useful to be used in overrides in the workflow. to be removed when new StructureData
+        if start_mg_dict: 
+            builder.magmom = magmom
+            builder.mag_dict = start_mg_dict
+        else:
+            builder.pop('pwscf')
+        
+        #we can set this also wrt to some protocol, TOBE discussed
+        if sc_matrix: 
+            builder.sc_matrix=orm.List(sc_matrix)
+            builder.pop('musconv')
+        builder.mu_spacing=orm.Float(mu_spacing)
+        builder.charge_supercell=orm.Bool(charge_supercell)
+        builder.kpoints_distance = orm.Float(kpoints_distance)
         
         
         #MB: 
@@ -506,14 +520,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             rst_mg = make_collinear_getmag_kind(
                 self.inputs.structure, self.inputs.magmom
             )
-            self.ctx.struct = rst_mg["struct_magkind"]
+            self.ctx.structure = rst_mg["struct_magkind"]
             self.ctx.start_mg_dict = rst_mg["start_mag_dict"]
         else:
-            self.ctx.struct = self.inputs.structure
+            self.ctx.structure = self.inputs.structure
 
         # check and get hubbard u
         if self.inputs.qe.hubbard_u:
-            inpt_st = self.ctx.struct.get_pymatgen_structure()
+            inpt_st = self.ctx.structure.get_pymatgen_structure()
             rst_u = check_get_hubbard_u_parms(inpt_st)
             self.ctx.hubbardu_dict = rst_u
         else:
@@ -531,6 +545,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         muon_list = self.ctx.mu_lst
 
         supercell_list = gensup(input_struct, muon_list, self.ctx.sc_matrix)  # ordinary function
+        if len(supercell_list) == 0:
+            return self.exit_codes.ERROR_NO_SUPERCELLS
+            
         self.ctx.supc_list = supercell_list
 
         # init relaxation calc count
@@ -825,7 +842,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             inputs.pw.structure = orm.StructureData(pymatgen=rlx_st)
             
             #MB: this should be done once for all, put here just for convenience
-            inputs.base.pw.pseudos = get_pseudos(
+            inputs.pw.pseudos = get_pseudos(
             inputs.pw.structure, self.inputs.pseudo_family.value
             )
             
@@ -944,7 +961,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             print(cnt_field)
             b_field = compute_dipolar_field(
                 self.inputs.structure,
-                self.inputs.qe.magmom,
+                self.inputs.magmom,
                 self.inputs.sc_matrix[0],
                 rlx_struct,
                 orm.Float(cnt_field),
@@ -1202,13 +1219,13 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
                 "CONTROL": {
                     "nstep": 200
                     },
-                "SYSTEM":{},
+                "SYSTEM":{
+                    "occupations": "smearing",
+                    "smearing": "gaussian",
+                    "degauss": 0.01,},
                 "ELECTRONS": {
                     "electron_maxstep": 300,
                     "mixing_beta": 0.30,
-                    "occupations": "smearing",
-                    "smearing": "gaussian",
-                    "degauss": 0.01,
                 },
                 },
                     "metadata": {
@@ -1234,6 +1251,7 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
         
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["nspin"]= 2
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["starting_magnetization"] = start_mg_dict.get_dict()
+        
     else:
         start_mg_dict = None
     # HUBBARD
@@ -1247,7 +1265,7 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u_kind"] = 0
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict
         
-    return _overrides, start_mg_dict
+    return _overrides, start_mg_dict, structure
 
 
 def iterdict(d,key):
@@ -1261,21 +1279,29 @@ def iterdict(d,key):
     if value: return value
 
 
-def recursive_consistency_check(input_dict):
+def recursive_consistency_check(input_dict,_):
     import copy
     
     """Validation of the inputs provided for the FindMuonWorkChain.
     """
     
     parameters = copy.deepcopy(input_dict)
-    _overrides, start_mg_dict = get_override_dict(parameters["structure"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None))
+    _overrides, start_mg_dict, structure = get_override_dict(parameters["structure"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None))
     
     keys = ["tot_charge","nspin","occupations","smearing"]
     
     wrong_inputs_relax = []
     wrong_inputs_pwscf = []
     
-    unconsistency_sentence = ''
+    musconv_inconsistency = ''
+    if "musconv" in parameters:
+        musconv_inconsistency = musconv_input_validator(parameters["musconv"])
+    
+    inconsistency_sentence = musconv_inconsistency
+    
+    if parameters["relax"]["base"]["pw"]["parameters"].get_dict()["CONTROL"]["calculation"] != 'relax':
+        inconsistency_sentence+=f'Checking inputs.relax.base.pw.parameters.CONTROL.calculation: can be only "relax". No cell relaxation should be performed.'
+    
     
     if 'base_final_scf' in parameters['relax']:
         if parameters['relax']['base_final_scf'] ==  {'metadata': {}, 'pw': {'metadata': {'options': {'stash': {}}}, 'monitors': {}, 'pseudos': {}}}:
@@ -1283,29 +1309,36 @@ def recursive_consistency_check(input_dict):
         elif parameters['relax']['base_final_scf'] ==  {}:
             pass
         else:
-            unconsistency_sentence+=f'Checking inputs.relax.base_final_scf: should not be set, the final scf after relaxation is not supported in the FindMuonWorkChain.'
+            inconsistency_sentence+=f'Checking inputs.relax.base_final_scf: should not be set, the final scf after relaxation is not supported in the FindMuonWorkChain.'
     
-    
+    if "pwscf" in parameters: #mu scf origin.
+        if not "pp_code" in parameters: 
+            inconsistency_sentence+=f'Checking inputs: "pp_code" input not provided but required!'
+        elif not parameters["pp_code"]: 
+            inconsistency_sentence+=f'Checking inputs: "pp_code" input not provided but required!'
+        
     for key in keys:
         value_input_relax = iterdict(parameters["relax"]["base"]["pw"]["parameters"].get_dict(),key)
-        value_input_pwscf = iterdict(parameters["pwscf"]["pw"]["parameters"].get_dict(),key)
         value_overrides = iterdict(_overrides,key)
         #print(value_input_relax,value_input_pwscf,value_overrides)
         if value_input_relax != value_overrides:
             if value_input_relax in [0, None] and value_overrides in [0, None]:
                 continue # 0 is None and viceversa
             wrong_inputs_relax.append(key)
-            unconsistency_sentence += f'Checking inputs.relax.base.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_relax}", but only "{value_overrides}" is consistent with your settings.\n'
-        if value_input_pwscf != value_overrides:
-            if key == "nspin" and value_input_pwscf == 2: 
-                continue
-            if value_input_pwscf in [0, None] and value_overrides in [0, None]:
-                continue # 0 is None and viceversa
-            wrong_inputs_pwscf.append(key)
-            unconsistency_sentence += f'Checking inputs.pwscf.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_pwscf}", but only "{value_overrides}" is consistent with your settings.\n'
+            inconsistency_sentence += f'Checking inputs.relax.base.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_relax}", but only "{value_overrides}" is consistent with your settings.\n'
+        
+        if "pwscf" in parameters: #mu scf origin.
+            value_input_pwscf = iterdict(parameters["pwscf"]["pw"]["parameters"].get_dict(),key)
+            if value_input_pwscf != value_overrides:
+                if key == "nspin" and value_input_pwscf == 2: 
+                    continue
+                if value_input_pwscf in [0, None] and value_overrides in [0, None]:
+                    continue # 0 is None and viceversa
+                wrong_inputs_pwscf.append(key)
+                inconsistency_sentence += f'Checking inputs.pwscf.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_pwscf}", but only "{value_overrides}" is consistent with your settings.\n'
     
     if len(wrong_inputs_relax+wrong_inputs_pwscf)>0:
-        raise ValueError('\n'+unconsistency_sentence+'\n Please check the inputs of your FindMuonWorkChain instance or use "get_builder_from_protocol()" method to populate correctly the inputs.')
+        raise ValueError('\n'+inconsistency_sentence+'\n Please check the inputs of your FindMuonWorkChain instance or use "get_builder_from_protocol()" method to populate correctly the inputs.')
 
                       
     return 
