@@ -370,6 +370,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         #useful to be used in overrides in the workflow. to be removed when new StructureData
         if start_mg_dict: 
+            if isinstance(magmom, list):
+                magmom = orm.List(magmom)
             builder.magmom = magmom
             builder.mag_dict = start_mg_dict
         else:
