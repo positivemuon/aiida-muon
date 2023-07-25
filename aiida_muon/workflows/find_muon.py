@@ -12,7 +12,8 @@ from pymatgen.electronic_structure.core import Magmom
 from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 
-
+from aiida.orm import StructureData as LegacyStructureData
+from aiida_atomistic.data.structure import StructureData
 #MB
 from aiida_musconv.workflows.musconv import MusconvWorkChain
 from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
@@ -46,9 +47,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         spec.input(
             "structure",
-            valid_type=orm.StructureData,
+            valid_type=(LegacyStructureData, StructureData),
             required=True,
-            help="Input initial structure",
+            help="Input initial structure. Can be both StructureData or LegacyStructureData.",
         )
 
         spec.input(
@@ -71,7 +72,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             "magmom",
             valid_type=orm.List,
             required=False,
-            help="List of 3D magnetic moments in Bohr magneton of the corresponding input structure if magnetic",
+            help="List of 3D magnetic moments in Bohr magneton of the corresponding input structure if magnetic. If provide LegacyStructureData for magnetic calculation, provide also magmom.",
         )
         
         spec.input(
@@ -79,7 +80,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Dict,
             required=False,
             #non_db=True,
-            help="magnetic dict created in protocols.",
+            help="magnetic dict created in protocols. Should be dict and not orm.Dict, but will disappear soon.",
         )
 
         spec.input(
