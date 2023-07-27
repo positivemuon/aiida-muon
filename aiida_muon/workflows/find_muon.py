@@ -12,11 +12,12 @@ from pymatgen.electronic_structure.core import Magmom
 from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 
-from aiida.orm import StructureData as LegacyStructureData
-from aiida_atomistic.data.structure import StructureData
-#MB
+
 from aiida_musconv.workflows.musconv import MusconvWorkChain
 from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
+
+from aiida.orm import StructureData as LegacyStructureData
+from aiida_atomistic.data.structure import StructureData
 
 from .niche import Niche
 from .utils import (
@@ -47,9 +48,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         spec.input(
             "structure",
-            valid_type=(LegacyStructureData, StructureData),
+            valid_type=(StructureData, LegacyStructureData),
             required=True,
-            help="Input initial structure. Can be both StructureData or LegacyStructureData.",
+            help="Input initial structure",
         )
 
         spec.input(
@@ -72,7 +73,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             "magmom",
             valid_type=orm.List,
             required=False,
-            help="List of 3D magnetic moments in Bohr magneton of the corresponding input structure if magnetic. If provide LegacyStructureData for magnetic calculation, provide also magmom.",
+            help="List of 3D magnetic moments in Bohr magneton of the corresponding input structure if magnetic",
         )
         
         spec.input(
@@ -80,7 +81,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Dict,
             required=False,
             #non_db=True,
-            help="magnetic dict created in protocols. Should be dict and not orm.Dict, but will disappear soon.",
+            help="magnetic dict created in protocols.",
         )
 
         spec.input(
@@ -209,7 +210,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.setup_magnetic_hubbardu_dict,
             ),
             cls.get_initial_supercell_structures,
-            #cls.setup_pw_overrides,   TODO step done as input validator
+            if_(cls.not_from_protocols)(
+                cls.setup_pw_overrides,
+            ),
             cls.compute_supercell_structures,
             cls.collect_relaxed_structures,
             cls.analyze_relaxed_structures,
@@ -316,7 +319,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         _overrides, start_mg_dict, structure = get_override_dict(structure, kpoints_distance, charge_supercell, magmom)
         
         overrides = recursive_merge(overrides,_overrides)
-        print(overrides) 
         
         #### Musconv
         builder_musconv = MusconvWorkChain.get_builder_from_protocol(
@@ -371,9 +373,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         #useful to be used in overrides in the workflow. to be removed when new StructureData
         if start_mg_dict: 
+            if isinstance(magmom, list):
+                magmom = orm.List(magmom)
             builder.magmom = magmom
             builder.mag_dict = start_mg_dict
-        else:
+        elif not hasattr(structure, "magnetic"):
             builder.pop('pwscf')
         
         #we can set this also wrt to some protocol, TOBE discussed
@@ -472,14 +476,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #see if relaxed unit cell is obtained. 
             self.ctx.sc_matrix = self.ctx["MusconvWorkchain"].outputs.Converged_SCmatrix.get_array('sc_mat')
 
-            
-    #I think here we should have some setup
-    
+                
     def setup(self):
         #just in case Musconv want also to provide the relaxed unit cell... maybe not necessary? 
         if not hasattr(self.ctx,"structure"): 
             self.ctx.structure = self.inputs.structure
-            
+        
+        if hasattr(self.ctx.structure,"magnetic"):
+            self.ctx.magmom = self.ctx.structure.magnetic.to_list()
+        elif "magmom" in self.inputs:
+            self.ctx.magmom = self.inputs.magmom.get_list()
         return
             
 
@@ -759,12 +765,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.report("Analyzing the relaxed structures")
         inpt_st = self.ctx.structure.get_pymatgen_structure()
 
-        if "magmom" in self.inputs:
+        if "magmom" in self.ctx:
             r_anly = analyze_structures(
                 self.ctx.supc_list[0],
                 self.ctx.relaxed_outputs,
                 inpt_st,
-                self.inputs.magmom,
+                self.ctx.magmom,
+            )
+        elif hasattr(self.ctx.structure,"magnetic"):
+            r_anly = analyze_structures(
+                self.ctx.supc_list[0],
+                self.ctx.relaxed_outputs,
+                inpt_st,
+                self.ctx.magmom,
             )
         else:
             r_anly = analyze_structures(
@@ -800,9 +813,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # return self.inputs.magmom is not None
         # return 'magmom' in self.inputs
         if "magmom" in self.inputs:
-            return self.inputs.magmom is not None
+            return self.inputs.magmom is not None or hasattr(self.ctx.structure,"magnetic")
         else:
-            return False
+            return hasattr(self.ctx.structure,"magnetic")
 
     # scf first then pp.x ! TODO: NOT NECESSARY REMOVE ON REVISIT
 
@@ -962,7 +975,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             print(cnt_field)
             b_field = compute_dipolar_field(
                 self.inputs.structure,
-                self.inputs.magmom,
+                self.ctx.magmom,
                 self.inputs.sc_matrix[0],
                 rlx_struct,
                 orm.Float(cnt_field),
@@ -1243,7 +1256,7 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
         
     # MAGMOMS       
-    if magmom:
+    if magmom and not hasattr(structure, "magnetic"):
         rst_mg = make_collinear_getmag_kind(
             structure, magmom,
         )
