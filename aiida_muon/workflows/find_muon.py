@@ -13,7 +13,6 @@ from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 
 
-#MB
 from aiida_musconv.workflows.musconv import MusconvWorkChain
 from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
 
@@ -119,15 +118,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             required=False,
             help="To run charged supercell for positive muon or not (neutral supercell)",
         )
-        
-        #TODO: decide if you want to retain this inputs... actually I think are not needed and should be set in the qe 
-
-        '''spec.input(
-            "parameters",
-            valid_type=orm.Dict,
-            required=False,
-            help=" Preferred pw.x set of parameters, otherwise it is set automatically",
-        )'''
 
         spec.expose_inputs(
             PwRelaxWorkChain,
@@ -152,20 +142,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             exclude=("pw.structure", "kpoints"),
         )  # 
         
+        #very optional inputs:
         spec.input(
             "qe_settings",
             valid_type=orm.Dict,
             required=False,
             help=" Preferred settings for the calc, otherwise default is used",
         )
-        
-        
-        '''spec.input(
-            "qe_metadata",
-            valid_type=orm.Dict,
-            required=False,
-            help=" Preferred metadata and scheduler options for relax calc, otherwise  default in the Code is used",
-        )'''
 
         spec.input(
             "pp_metadata",
@@ -183,8 +166,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             help=" Preferred metadata and scheduler options for musconv",
         )
 
-        #MB trying to add in the workflow the MusconvWorkchain. 
-        #MB activate it only if sc_matrix not present.
+        # activate MusconvWorkChain only if sc_matrix input not present.
         spec.expose_inputs(
             MusconvWorkChain,
             namespace="musconv",
@@ -280,23 +262,24 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         cls,
         pw_code,
         structure,
-        protocol=None,
-        overrides={},
-        relax_musconv=False,
-        magmom=None,
+        pp_code: orm.Code = None,
+        protocol: str =None,
+        overrides: dict = {},
+        relax_musconv: bool =False,
+        magmom: list = None,
         options=None,
-        sc_matrix=None,
-        mu_spacing=1.0,
-        kpoints_distance=0.401,
-        charge_supercell=True,
-        pseudo_family="SSSP/1.2/PBE/efficiency",
-        pp_code = None,
+        sc_matrix: list =None,
+        mu_spacing: float =1.0,
+        kpoints_distance: float =0.401,
+        charge_supercell: bool =True,
+        pseudo_family: str ="SSSP/1.2/PBE/efficiency",
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
 
         :param pw_code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
+        :param pp_code: the ``Code`` instance configured for the ``quantumespresso.pp`` plugin.
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
         :param options: A dictionary of options that will be recursively set for the ``metadata.options`` input of all
@@ -310,19 +293,17 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
-        import copy
         
         _overrides, start_mg_dict, structure = get_override_dict(structure, kpoints_distance, charge_supercell, magmom)
         
         overrides = recursive_merge(overrides,_overrides)
-        print(overrides) 
         
         #### Musconv
         builder_musconv = MusconvWorkChain.get_builder_from_protocol(
                 pw_code = pw_code,
                 structure = structure,
-                pseudo_family=pseudo_family,
-                relax_unitcell=relax_musconv,
+                pseudo_family = pseudo_family,
+                relax_unitcell = relax_musconv,
                 )
         
         builder_musconv.pop('structure', None)
@@ -381,12 +362,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if sc_matrix: 
             builder.sc_matrix=orm.List(sc_matrix)
             builder.pop('musconv')
+
         builder.mu_spacing=orm.Float(mu_spacing)
         builder.charge_supercell=orm.Bool(charge_supercell)
         builder.kpoints_distance = orm.Float(kpoints_distance)
         
         
-        #MB: 
         # PpCalculation inputs: Only this, the rest is really default... 
         # I think is ok to be set on the fly later for now, but we can discuss.
         if pp_code: builder.pp_code = pp_code
@@ -397,7 +378,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         return builder
 
-    #MB TODO
     def not_converged_supercell(self):
         """understand if musconv is needed: search for the sc_matrix in inputs."""
         if hasattr(self.inputs,"sc_matrix"):
@@ -406,81 +386,40 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         return not hasattr(self.inputs,"sc_matrix")
         
     
-    #MB TODO
     def converge_supercell(self):
         """call MusconvWorkchain"""
 
         inputs = AttributeDict(self.exposed_inputs(MusconvWorkChain, namespace='musconv'))
         inputs.structure = self.inputs.structure
-        #inputs.pwscf.code = self.inputs.pw_code
-        parameters_override = {
-            "CONTROL": {
-                "calculation": "scf",
-                "restart_mode": "from_scratch",
-                "tstress": True,
-                "tprnfor": True,
-            },
-            "SYSTEM": {
-                #"ecutwfc": 30.0,
-                #"ecutrho": 240.0,
-                "tot_charge": int(self.inputs.charge_supercell.value),
-                #'nspin': 2,
-                "occupations": "smearing",
-                "smearing": "cold",
-                "degauss": 0.01,
-            },
-            "ELECTRONS": {
-                "conv_thr": 1.0e-6,
-                "electron_maxstep": 300,
-                "mixing_beta": 0.3,
-            },
-        }
 
-        
-        #
-        
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
-
-        parameters = inputs.pwscf.pw.parameters.get_dict()
-        
-        parameters = recursive_merge(
-            parameters, parameters_override
-        )
-        
-        inputs.pwscf.pw.parameters = orm.Dict(dict=parameters)
         
         if hasattr(self.inputs,"musconv_metadata"):
             inputs.pwscf.pw.metadata = self.inputs.musconv_metadata
 
-        inputs.metadata.call_link_label = f'musconvWorkchain'
+        inputs.metadata.call_link_label = f'MusConvWorkchain'
         future = self.submit(MusconvWorkChain, **inputs)
-        # key = f'workchains.sub{i_index}' #nested sub
         key = "MusconvWorkchain"
         self.report(
             f"Launching MusconvWorkchain (PK={future.pk}) for  structure {self.inputs.structure.get_pymatgen_structure().formula}"
         )
         self.to_context(**{key: future})
 
-    #MB TODO
     def check_supercell_convergence(self):
-        """check if is finished ok"""
+        """check if finished_ok"""
 
         if not self.ctx["MusconvWorkchain"].is_finished_ok:
             return self.exit_codes.ERROR_MUSCONV_CALC_FAILED
         else:
             self.report("Found supercell")
-            #see if relaxed unit cell is obtained. 
             self.ctx.sc_matrix = self.ctx["MusconvWorkchain"].outputs.Converged_SCmatrix.get_array('sc_mat')
 
-            
-    #I think here we should have some setup
     
     def setup(self):
-        #just in case Musconv want also to provide the relaxed unit cell... maybe not necessary? 
+        # TODO: set, if any the final relaxed unit cell as obtained from the MusConvWorkchain pre-relaxation.
         if not hasattr(self.ctx,"structure"): 
-            self.ctx.structure = self.inputs.structure
-            
+            self.ctx.structure = self.inputs.structure            
         return
             
 
@@ -500,7 +439,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def not_from_protocols(self):
         #does not check for Hubbard inputs, but anyway will change.
         return not "mag_dict" in self.inputs
-    #MB this should be skipped now, as it is done in the protocols?
+    
     def setup_magnetic_hubbardu_dict(self):
         """
         Gets:
@@ -1256,6 +1195,7 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
         
     else:
         start_mg_dict = None
+
     # HUBBARD
     # check and assign hubbard u
     inpt_st = structure.get_pymatgen_structure()
@@ -1318,6 +1258,9 @@ def recursive_consistency_check(input_dict,_):
             inconsistency_sentence+=f'Checking inputs: "pp_code" input not provided but required!'
         elif not parameters["pp_code"]: 
             inconsistency_sentence+=f'Checking inputs: "pp_code" input not provided but required!'
+
+        if not "pp_metadata" in parameters: 
+            inconsistency_sentence+=f'Checking inputs: "pp_metadata" input not provided but required!'
         
     for key in keys:
         value_input_relax = iterdict(parameters["relax"]["base"]["pw"]["parameters"].get_dict(),key)
