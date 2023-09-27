@@ -11,13 +11,13 @@ from pymatgen.core import Structure
 from pymatgen.electronic_structure.core import Magmom
 from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
+from typing import Union
 
 
 from aiida_musconv.workflows.musconv import MusconvWorkChain
 from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
 
 from aiida.orm import StructureData as LegacyStructureData
-from aiida_atomistic.data.structure import StructureData
 
 from .niche import Niche
 from .utils import (
@@ -29,6 +29,7 @@ from .utils import (
     load_workchain_data,
 )
 
+StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 
@@ -266,7 +267,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def get_builder_from_protocol(
         cls,
         pw_code,
-        structure,
+        structure: Union[StructureData, LegacyStructureData],
         pp_code: orm.Code = None,
         protocol: str =None,
         overrides: dict = {},
@@ -360,8 +361,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 magmom = orm.List(magmom)
             builder.magmom = magmom
             builder.mag_dict = start_mg_dict
-        elif not hasattr(structure, "magnetic"):
-            builder.pop('pwscf')
+        elif isinstance(structure,StructureData):
+            if not "magnetization" in structure.get_defined_properties():
+                builder.pop('pwscf')
         
         #we can set this also wrt to some protocol, TOBE discussed
         if sc_matrix: 
@@ -426,8 +428,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if not hasattr(self.ctx,"structure"): 
             self.ctx.structure = self.inputs.structure
         
-        if hasattr(self.ctx.structure,"magnetic"):
-            self.ctx.magmom = self.ctx.structure.magnetic.to_list()
+        if isinstance(self.ctx.structure,StructureData):
+            if "magnetization" in self.ctx.structure.get_defined_properties():
+                self.ctx.magmom = self.ctx.structure.get_property_attribute("magnetization")["moments"]
         elif "magmom" in self.inputs:
             self.ctx.magmom = self.inputs.magmom.get_list()
         return
@@ -704,19 +707,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def analyze_relaxed_structures(self):
         """
         Analyze relaxed structures and get unique candidate sites and
-        check if there are new magnetic equivalent sites to calculate
+        check if there are new magnetic inequivalent (via symmetry operations) 
+        sites to calculate
         """
         self.report("Analyzing the relaxed structures")
         inpt_st = self.ctx.structure.get_pymatgen_structure()
 
         if "magmom" in self.ctx:
-            r_anly = analyze_structures(
-                self.ctx.supc_list[0],
-                self.ctx.relaxed_outputs,
-                inpt_st,
-                self.ctx.magmom,
-            )
-        elif hasattr(self.ctx.structure,"magnetic"):
             r_anly = analyze_structures(
                 self.ctx.supc_list[0],
                 self.ctx.relaxed_outputs,
@@ -756,10 +753,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         # return self.inputs.magmom is not None
         # return 'magmom' in self.inputs
-        if "magmom" in self.inputs:
-            return self.inputs.magmom is not None or hasattr(self.ctx.structure,"magnetic")
+        if isinstance(self.ctx.structure,StructureData):
+            return "magnetization" in self.ctx.structure.get_defined_properties()          
         else:
-            return hasattr(self.ctx.structure,"magnetic")
+            if "magmom" in self.inputs:
+                return self.inputs.magmom is not None
 
     # scf first then pp.x ! TODO: NOT NECESSARY REMOVE ON REVISIT
 
@@ -824,7 +822,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         #MB: if "pp.metadata" in self.inputs:
         if hasattr(self.inputs,"pp_metadata"):
-            pp_builder.metadata = self.inputs.pp_metadata.get_dict()
+            pp_builder.metadata = self.inputs.pp_metadata #.get_dict()
 
 
         parameters = orm.Dict(
@@ -1077,7 +1075,7 @@ def gensup(p_st, mu_list, sc_mat):
 
 
 @calcfunction
-def make_collinear_getmag_kind(aiid_st, magmm):
+def make_collinear_getmag_kind(aiid_st, magmm, half=True):
     """
     This calls the 'get_collinear_mag_kindname' utility function.
     It takes the provided magmom, make it collinear and then with
@@ -1091,7 +1089,7 @@ def make_collinear_getmag_kind(aiid_st, magmm):
     # from array to Magmom object
     magmoms = [Magmom(magmom) for magmom in magmm]
 
-    st_k, st_m_dict = get_collinear_mag_kindname(p_st, magmoms)
+    st_k, st_m_dict = get_collinear_mag_kindname(p_st, magmoms, half)
 
     aiida_st2 = orm.StructureData(pymatgen=st_k)
     aiid_dict = orm.Dict(dict=st_m_dict)
@@ -1200,7 +1198,7 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
         
     # MAGMOMS       
-    if magmom and not hasattr(structure, "magnetic"):
+    if magmom: # drop this... correct ?and not hasattr(structure, "magnetic"):
         rst_mg = make_collinear_getmag_kind(
             structure, magmom,
         )
@@ -1241,7 +1239,7 @@ def iterdict(d,key):
 def recursive_consistency_check(input_dict,_):
     import copy
     
-    """Validation of the inputs provided for the FindMuonWorkChain.
+    """Validation of the inputs provided for the FindMuonWorkChain. It checks essentially the same of pw_overrides. If you go from protocols you are safe.
     """
     
     parameters = copy.deepcopy(input_dict)
@@ -1254,7 +1252,7 @@ def recursive_consistency_check(input_dict,_):
     
     musconv_inconsistency = ''
     if "musconv" in parameters:
-        musconv_inconsistency = musconv_input_validator(parameters["musconv"])
+        musconv_inconsistency = musconv_input_validator(parameters["musconv"],None)
     
     inconsistency_sentence = musconv_inconsistency
     

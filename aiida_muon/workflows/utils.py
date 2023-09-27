@@ -25,6 +25,8 @@ def get_collinear_mag_kindname(p_st, magm, half=True):
 
         magm: list
             corresponding magmom properties of the pymatgen structure instance.
+        half: bool
+            if True, only sets magnetic moments to 0,+-0.5.
 
     Raises
     ------
