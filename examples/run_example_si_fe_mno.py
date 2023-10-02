@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import numpy as np
 from aiida import load_profile, orm
+from aiida.plugins import DataFactory
 from aiida.engine import run, submit
 from pymatgen.core import Structure
 from pymatgen.io.cif import CifParser
@@ -37,14 +38,18 @@ code = orm.Code.get_from_string(codename)
 pcodename = "pp-qe-7.1@MPC3129"  # edit to user
 pcode = orm.Code.get_from_string(pcodename)
 
+StructureData = DataFactory("atomistic.structure")
 
 builder = FindMuonWorkChain.get_builder()
 builder.sc_matrix = scmat_node
-builder.qe.pw_code = code
-builder.qe.pp_code = pcode
-builder.qe.pseudofamily = orm.Str("SSSP/1.2/PBE/efficiency")
-builder.qe.k_dist = orm.Float(0.601)
-builder.qe.charged_supercell = orm.Bool(False)
+builder.pwscf.pw.code = code
+builder.pp_code = pcode
+builder.pseudo_family = orm.Str("SSSP/1.2/PBE/efficiency")
+builder.kpoints_distance = orm.Float(0.601)
+builder.charge_supercell = orm.Bool(False)
+
+## However, this works only with old version of QE... so the best example is the one in the jupyter notebook,
+## which uses the protocols which set automatically the U.
 builder.qe.hubbard_u = orm.Bool(True)
 
 # uncomment below for Si
@@ -73,12 +78,15 @@ builder.mu_spacing = orm.Float(0.75)  # for Fe  no primitive 4 mu sites
 # uncomment below for MnO
 # """
 smag1 = Structure.from_file("data/MnO.mcif", primitive=True)
-aiida_structure = orm.StructureData(pymatgen=smag1)
+
+StructureData = DataFactory("atomistic.structure")
+aiida_structure = StructureData(pymatgen=smag1)
 smag = aiida_structure.get_pymatgen_structure()
 magmoms = smag1.site_properties["magmom"]
 magmom = orm.List([list(magmom) for magmom in magmoms])
+aiida_structure.magnetization.set_from_components(magnetic_moment_per_site = magmom)
+
 builder.structure = aiida_structure
-builder.qe.magmom = magmom
 builder.mu_spacing = orm.Float(1.6)  # for mno primitive 2 mu sites,  4 mno atoms
 # """
 
@@ -108,8 +116,8 @@ parameters_dict = {
 }
 
 
-builder.qe.parameters = orm.Dict(dict=parameters_dict)
-builder.qe.metadata = orm.Dict(dict=pw_metadata)
+builder.pwscf.pw.parameters = parameters_dict
+builder.pwscf.pw.metadata = pw_metadata
 # builder.qe.settings =orm.Dict(dict=pw_settings)
 
 node = run(builder)

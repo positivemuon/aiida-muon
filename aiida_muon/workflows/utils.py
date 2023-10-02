@@ -109,7 +109,7 @@ def get_collinear_mag_kindname(p_st, magm, half=True):
     return p_st.copy(site_properties={"kind_name": kind_values}), start_mag_dict
 
 
-def check_get_hubbard_u_parms(p_st):
+def check_get_hubbard_u_parms(p_st, new_structuredata=False):
     """Set Hubbard U parameters for each kind of specie
 
     Parameters

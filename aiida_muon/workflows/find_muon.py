@@ -13,8 +13,6 @@ from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from typing import Union
 
-
-from aiida_musconv.workflows.musconv import MusconvWorkChain
 from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
 
 from aiida.orm import StructureData as LegacyStructureData
@@ -32,6 +30,7 @@ from .utils import (
 StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
+MusconvWorkChain = WorkflowFactory('musconv')
 
 class FindMuonWorkChain(ProtocolMixin, WorkChain):
     """
@@ -126,9 +125,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         spec.expose_inputs(
             PwRelaxWorkChain,
             namespace="relax",
-            exclude=("structure"),
+            exclude=("structure","base_final_scf"),
             namespace_options={
-                'required': False, 
+                'required': True, 
                 'populate_defaults': False,
                 'help': 'Inputs for SCF calculations.',
             },
@@ -304,6 +303,25 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         overrides = recursive_merge(overrides,_overrides)
         
+        #check on the structure: if hubbard is needed, do it with append onsite... if the structure is already stored, clone it. 
+        hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
+        if hubbard_params is not None:
+            if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
+                if structure.is_stored:
+                    print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
+                    structure = structure.clone()
+                    for kind, U in hubbard_params.items():
+                        structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                    print("done. Inspect structure.hubbard")
+                else:
+                    print("The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
+                    for kind, U in hubbard_params.items():
+                        structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                    print("done. Inspect structure.hubbard")  
+        
+        
+        #TODO: cleanup, too much pop, loops...
+        
         #### Musconv
         builder_musconv = MusconvWorkChain.get_builder_from_protocol(
                 pw_code = pw_code,
@@ -312,7 +330,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 relax_unitcell = relax_musconv,
                 )
         
-        builder_musconv.pop('structure', None)
+        #builder_musconv.pop('structure', None)
         
         #### simple PwBase for final scf mu-origin
         builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
@@ -349,11 +367,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.pseudo_family = orm.Str(pseudo_family)
         
         #setting subworkflows inputs
-        builder.musconv = builder_musconv  
+        for k,v in builder_musconv.items():
+            if k == "relax":
+                for k1,v1 in builder_musconv.relax.items():
+                    if k1 == "base_final_scf": continue
+                    setattr(builder.musconv.relax,k1,v1)
+            else:
+                setattr(builder.musconv,k,v)
+        #builder.musconv = builder_musconv  If you use this instead of the above, it will give ValueError.
         builder.pwscf = builder_pwscf
         builder.relax = builder_relax
         
         if not relax_musconv: builder.musconv.pop('relax')
+        builder.musconv.pop('structure')
         
         #useful to be used in overrides in the workflow. to be removed when new StructureData
         if start_mg_dict: 
@@ -628,8 +654,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             inputs.base.kpoints_distance = self.inputs.kpoints_distance
         
         for i_index in range(len(supercell_list)):
-                        
-            inputs.structure = orm.StructureData(pymatgen=supercell_list[i_index])
+            
+            inputs.structure = StructureData(pymatgen=supercell_list[i_index])
             
             #MB: this should be done once for all, put here just for convenience
             inputs.base.pw.pseudos = get_pseudos(
@@ -784,7 +810,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         for j_index, clus in enumerate(unique_cluster_list):
             #
             # rlx_st = clus['rlxd_struct']
-            # rlx_struct = orm.StructureData(pymatgen = rlx_st)
+            # rlx_struct = StructureData(pymatgen = rlx_st)
             # or
             c_uuid = self.ctx.n_uuid_dict[clus["idx"]]
             rlx_node = orm.load_node(c_uuid)
@@ -795,7 +821,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             rlx_st.translate_sites(
                 range(rlx_st.num_sites), -musite, frac_coords=True, to_unit_cell=False
             )
-            inputs.pw.structure = orm.StructureData(pymatgen=rlx_st)
+            inputs.pw.structure = StructureData(pymatgen=rlx_st)
             
             #MB: this should be done once for all, put here just for convenience
             inputs.pw.pseudos = get_pseudos(
@@ -912,7 +938,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #
             # rlx_st = clus['rlxd_struct']
             rlx_st = Structure.from_dict(clus["rlxd_struct"])
-            rlx_struct = orm.StructureData(pymatgen=rlx_st)
+            rlx_struct = StructureData(pymatgen=rlx_st)
             cnt_field = cnt_field_dict[str(clus["idx"])][1]
             print(cnt_field)
             b_field = compute_dipolar_field(
@@ -993,7 +1019,7 @@ def get_dict_output(outdata):
 
 @calcfunction
 def niche_add_impurities(
-    structure: orm.StructureData,
+    structure: StructureData,
     niche_atom: orm.Str,
     niche_spacing: orm.Float,
     niche_distance: orm.Float,
@@ -1016,7 +1042,7 @@ def niche_add_impurities(
     '''
     Miki Bonacci: The new_structure_data is needed here? don't think so.
     '''
-    new_structure_data = orm.StructureData()
+    new_structure_data = StructureData()
     new_structure_data.set_pymatgen(n_st)
     # print(n_st)
 
@@ -1091,7 +1117,7 @@ def make_collinear_getmag_kind(aiid_st, magmm, half=True):
 
     st_k, st_m_dict = get_collinear_mag_kindname(p_st, magmoms, half)
 
-    aiida_st2 = orm.StructureData(pymatgen=st_k)
+    aiida_st2 = StructureData(pymatgen=st_k)
     aiid_dict = orm.Dict(dict=st_m_dict)
 
     return {"struct_magkind": aiida_st2, "start_mag_dict": aiid_dict}
@@ -1147,10 +1173,10 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
 
 @calcfunction
 def compute_dipolar_field(
-    p_st: orm.StructureData,
+    p_st: StructureData,
     magmm: orm.List,
     sc_matr: orm.List,
-    r_supst: orm.StructureData,
+    r_supst: StructureData,
     cnt_field: orm.Float,
 ):
     """
@@ -1239,12 +1265,27 @@ def iterdict(d,key):
 def recursive_consistency_check(input_dict,_):
     import copy
     
-    """Validation of the inputs provided for the FindMuonWorkChain. It checks essentially the same of pw_overrides. If you go from protocols you are safe.
+    """Validation of the inputs provided for the FindMuonWorkChain. It checks essentially the same of pw_overrides. If you go from protocols you are safe, except for Hubbard: 
+    an exception is raise if it is needed, but you have to set it up in your StructureData. PROBLEM: how to deal with supercell generation...
     """
+    
+    #check hubbard here ore somewhere else. 
     
     parameters = copy.deepcopy(input_dict)
     _overrides, start_mg_dict, structure = get_override_dict(parameters["structure"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None))
     
+    inconsistency_sentence = ''
+    
+    #Hubbard validation in the structure:
+    hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
+    if hubbard_params is not None:
+        if "hubbard" not in y.get_defined_properties() or y.hubbard.parameters == []:
+            if structure.is_stored:
+                inconsistency_sentence+="The structure you provided as input is stored but requires hubbard parameters. Please define a new StructureData instance with also hubbard parameters according to this: \n{hubbard_params}."
+            else:
+                inconsistency_sentence+="The structure you provided as input requires hubbard parameters. Please define hubbard parameters according to this: \n{hubbard_params}."
+        
+    #QE inputs validation:
     keys = ["tot_charge","nspin","occupations","smearing"]
     
     wrong_inputs_relax = []
@@ -1252,9 +1293,9 @@ def recursive_consistency_check(input_dict,_):
     
     musconv_inconsistency = ''
     if "musconv" in parameters:
-        musconv_inconsistency = musconv_input_validator(parameters["musconv"],None)
+        musconv_inconsistency = musconv_input_validator(parameters["musconv"],None,caller="FindMuonWorkchain")
     
-    inconsistency_sentence = musconv_inconsistency
+    if musconv_inconsistency: inconsistency_sentence += musconv_inconsistency
     
     if parameters["relax"]["base"]["pw"]["parameters"].get_dict()["CONTROL"]["calculation"] != 'relax':
         inconsistency_sentence+=f'Checking inputs.relax.base.pw.parameters.CONTROL.calculation: can be only "relax". No cell relaxation should be performed.'
