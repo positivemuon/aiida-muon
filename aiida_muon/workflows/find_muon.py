@@ -183,17 +183,18 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         spec.inputs.validator = recursive_consistency_check
         
         spec.outline(
+            cls.setup_structure_data_compatibility,
             if_(cls.not_converged_supercell)(     
                 cls.converge_supercell,         
                 cls.check_supercell_convergence,          
             ),
             cls.setup,
             cls.get_initial_muon_sites,
-            if_(cls.not_from_protocols)(
+            if_(cls.old_structuredata)(
                 cls.setup_magnetic_hubbardu_dict,
             ),
             cls.get_initial_supercell_structures,
-            if_(cls.not_from_protocols)(
+            if_(cls.old_structuredata)(
                 cls.setup_pw_overrides,
             ),
             cls.compute_supercell_structures,
@@ -275,7 +276,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         options=None,
         sc_matrix: list =None,
         mu_spacing: float =1.0,
-        kpoints_distance: float =0.401,
+        kpoints_distance: float =0.301,
         charge_supercell: bool =True,
         pseudo_family: str ="SSSP/1.2/PBE/efficiency",
         **kwargs,
@@ -305,19 +306,20 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         #check on the structure: if hubbard is needed, do it with append onsite... if the structure is already stored, clone it. 
         hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
-        if hubbard_params is not None:
-            if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
-                if structure.is_stored:
-                    print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
-                    structure = structure.clone()
-                    for kind, U in hubbard_params.items():
-                        structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                    print("done. Inspect structure.hubbard")
-                else:
-                    print("The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
-                    for kind, U in hubbard_params.items():
-                        structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                    print("done. Inspect structure.hubbard")  
+        if isinstance(structure,StructureData):
+            if hubbard_params is not None:
+                if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
+                    if structure.is_stored:
+                        print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
+                        structure = structure.clone()
+                        for kind, U in hubbard_params.items():
+                            structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                        print("done. Inspect structure.hubbard")
+                    else:
+                        print("The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
+                        for kind, U in hubbard_params.items():
+                            structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                        print("done. Inspect structure.hubbard")  
         
         
         #TODO: cleanup, too much pop, loops...
@@ -410,6 +412,17 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 builder[i] = overrides[i]
         
         return builder
+    
+    
+    def setup_structure_data_compatibility(self):
+        """
+        Temporary pre-process to understand if 
+        we use StructureData or LegacyStructureData
+        """
+        if isinstance(self.inputs.structure,StructureData):
+            self.ctx.structure_type = StructureData
+        else:
+            self.ctx.structure_type = LegacyStructureData
 
     def not_converged_supercell(self):
         """understand if musconv is needed: search for the sc_matrix in inputs."""
@@ -475,9 +488,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         return
 
-    def not_from_protocols(self):
+    def old_structuredata(self):
         #does not check for Hubbard inputs, but anyway will change.
-        return not "mag_dict" in self.inputs
+        return isinstance(self.ctx.structure, LegacyStructureData)
     
     def setup_magnetic_hubbardu_dict(self):
         """
@@ -655,7 +668,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         for i_index in range(len(supercell_list)):
             
-            inputs.structure = StructureData(pymatgen=supercell_list[i_index])
+            inputs.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
             
             #MB: this should be done once for all, put here just for convenience
             inputs.base.pw.pseudos = get_pseudos(
@@ -821,7 +834,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             rlx_st.translate_sites(
                 range(rlx_st.num_sites), -musite, frac_coords=True, to_unit_cell=False
             )
-            inputs.pw.structure = StructureData(pymatgen=rlx_st)
+            inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
             
             #MB: this should be done once for all, put here just for convenience
             inputs.pw.pseudos = get_pseudos(
@@ -938,7 +951,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #
             # rlx_st = clus['rlxd_struct']
             rlx_st = Structure.from_dict(clus["rlxd_struct"])
-            rlx_struct = StructureData(pymatgen=rlx_st)
+            rlx_struct = self.ctx.structure_type(pymatgen=rlx_st)
             cnt_field = cnt_field_dict[str(clus["idx"])][1]
             print(cnt_field)
             b_field = compute_dipolar_field(
@@ -1019,7 +1032,7 @@ def get_dict_output(outdata):
 
 @calcfunction
 def niche_add_impurities(
-    structure: StructureData,
+    structure: Union[StructureData,LegacyStructureData],
     niche_atom: orm.Str,
     niche_spacing: orm.Float,
     niche_distance: orm.Float,
@@ -1042,7 +1055,10 @@ def niche_add_impurities(
     '''
     Miki Bonacci: The new_structure_data is needed here? don't think so.
     '''
-    new_structure_data = StructureData()
+    if isinstance(structure,StructureData):
+        new_structure_data = StructureData()
+    else:
+        new_structure_data = LegacyStructureData()
     new_structure_data.set_pymatgen(n_st)
     # print(n_st)
 
@@ -1117,7 +1133,10 @@ def make_collinear_getmag_kind(aiid_st, magmm, half=True):
 
     st_k, st_m_dict = get_collinear_mag_kindname(p_st, magmoms, half)
 
-    aiida_st2 = StructureData(pymatgen=st_k)
+    if isinstance(aiid_st,StructureData):
+        aiida_st2 = StructureData(pymatgen=st_k)
+    else:
+        aiida_st2 = LegacyStructureData(pymatgen=st_k)
     aiid_dict = orm.Dict(dict=st_m_dict)
 
     return {"struct_magkind": aiida_st2, "start_mag_dict": aiid_dict}
@@ -1173,10 +1192,10 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
 
 @calcfunction
 def compute_dipolar_field(
-    p_st: StructureData,
+    p_st: Union[StructureData,LegacyStructureData],
     magmm: orm.List,
     sc_matr: orm.List,
-    r_supst: StructureData,
+    r_supst: Union[StructureData,LegacyStructureData],
     cnt_field: orm.Float,
 ):
     """
