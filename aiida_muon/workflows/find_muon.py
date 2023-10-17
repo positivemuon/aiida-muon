@@ -16,6 +16,7 @@ from typing import Union
 from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
 
 from aiida.orm import StructureData as LegacyStructureData
+from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
 
 from .niche import Niche
 from .utils import (
@@ -31,6 +32,34 @@ StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 MusconvWorkChain = WorkflowFactory('musconv')
+
+@calcfunction
+def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
+    hubbard_structure = HubbardStructureData.from_structure(structure)
+    for kind, U in hubbard_dict.items():
+        hubbard_structure. initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+    return hubbard_structure
+
+def assign_hubbard_parameters(hubbard_structure, hubbard_dict):
+    for kind, U in hubbard_dict.items():
+        hubbard_structure. initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+
+def MusconvWorkChain_override_validator(inputs,ctx=None):
+    """validate inputs for musconv.relax; actually, it is
+    just a way to avoid defining it if we do not want it. 
+    otherwise the default check is done and it will excepts. 
+    """
+    if "musconv" in inputs.keys():
+        if "parameters" in inputs["musconv"]["pwscf"]["pw"].keys():
+            if len(inputs["musconv"]["pwscf"]["pw"]["parameters"].get_dict()):
+                original_MusconvWorkChain.spec().inputs.validator(inputs["musconv"],ctx)
+            else:
+                return None
+        else:
+            return None
+    
+MusconvWorkChain.spec().inputs.validator = MusconvWorkChain_override_validator
+
 
 class FindMuonWorkChain(ProtocolMixin, WorkChain):
     """
@@ -107,7 +136,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         )
 
         spec.input(
-            "qe.hubbard_u",
+            "hubbard_u",
             valid_type=orm.Bool,
             default=lambda: orm.Bool(True),
             required=False,
@@ -267,7 +296,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def get_builder_from_protocol(
         cls,
         pw_code,
-        structure: Union[StructureData, LegacyStructureData],
+        structure: Union[StructureData, LegacyStructureData, HubbardStructureData],
         pp_code: orm.Code = None,
         protocol: str =None,
         overrides: dict = {},
@@ -278,6 +307,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         mu_spacing: float =1.0,
         kpoints_distance: float =0.301,
         charge_supercell: bool =True,
+        hubbard: bool = True,
         pseudo_family: str ="SSSP/1.2/PBE/efficiency",
         **kwargs,
     ):
@@ -300,7 +330,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
         
-        _overrides, start_mg_dict, structure = get_override_dict(structure, kpoints_distance, charge_supercell, magmom)
+        _overrides, start_mg_dict, structure = get_override_dict(structure, kpoints_distance, charge_supercell, magmom,hubbard)
         
         overrides = recursive_merge(overrides,_overrides)
         
@@ -320,7 +350,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         for kind, U in hubbard_params.items():
                             structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                         print("done. Inspect structure.hubbard")  
-        
+        elif isinstance(structure,HubbardStructureData):
+            print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
+            for kind, U in hubbard_params.items():
+                structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+            print("done. Inspect structure.hubbard")  
+                    
         
         #TODO: cleanup, too much pop, loops...
         
@@ -369,6 +404,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.pseudo_family = orm.Str(pseudo_family)
         
         #setting subworkflows inputs
+        #probably, it is better to populate defaults and then pop if not needed, as done later.
         for k,v in builder_musconv.items():
             if k == "relax":
                 for k1,v1 in builder_musconv.relax.items():
@@ -380,7 +416,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.pwscf = builder_pwscf
         builder.relax = builder_relax
         
-        if not relax_musconv: builder.musconv.pop('relax')
+        #if not relax_musconv: builder.musconv.pop('relax')
         builder.musconv.pop('structure')
         
         #useful to be used in overrides in the workflow. to be removed when new StructureData
@@ -401,7 +437,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.mu_spacing=orm.Float(mu_spacing)
         builder.charge_supercell=orm.Bool(charge_supercell)
         builder.kpoints_distance = orm.Float(kpoints_distance)
-        
+        builder.hubbard_u = orm.Bool(hubbard)
         
         # PpCalculation inputs: Only this, the rest is really default... 
         # I think is ok to be set on the fly later for now, but we can discuss.
@@ -519,19 +555,17 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             self.ctx.structure = self.inputs.structure
 
         # check and get hubbard u
-        if self.inputs.qe.hubbard_u:
+        # AAA compatibility only with qe>=7.1 and old StructureData; new Hubbard format.
+        if self.inputs.hubbard_u and not isinstance(self.ctx.structure,HubbardStructureData) and isinstance(self.ctx.structure,LegacyStructureData):
             inpt_st = self.ctx.structure.get_pymatgen_structure()
             rst_u = check_get_hubbard_u_parms(inpt_st)
             self.ctx.hubbardu_dict = rst_u
+            #self.ctx.structure = create_hubbard_structure(self.ctx.structure,self.ctx.hubbardu_dict)
         else:
             self.ctx.hubbardu_dict = None
 
     def get_initial_supercell_structures(self):
         """Get initial supercell+muon list"""
-        '''
-        Miki Bonacci: here there should be the improvement, - pt2 -
-        only needed to be generated the structure data which contains all the magmom and hubbard info.
-        '''
 
         self.report("Getting supercell list")
         input_struct = self.ctx.structure.get_pymatgen_structure()
@@ -627,7 +661,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         # check and assign hubbard u
         # MB this should be automatically done in the new implementation, at least at the protocol generation level.
-        if "hubbardu_dict" in self.ctx:
+        '''if "hubbardu_dict" in self.ctx:
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"lda_plus_u": True}}
             )
@@ -638,7 +672,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"],
                 {"SYSTEM": {"Hubbard_U": self.ctx.hubbardu_dict}},
-            )
+            )'''
             # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'lda_plus_u': True}})
             # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'lda_plus_u_kind': 0}})
             # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'Hubbard_U': self.ctx.hubbardu_dict}})
@@ -669,6 +703,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         for i_index in range(len(supercell_list)):
             
             inputs.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
+            if self.ctx.hubbardu_dict and not isinstance(self.ctx.structure,HubbardStructureData):
+                inputs.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=supercell_list[i_index]),self.ctx.hubbardu_dict)
+            
             
             #MB: this should be done once for all, put here just for convenience
             inputs.base.pw.pseudos = get_pseudos(
@@ -835,11 +872,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 range(rlx_st.num_sites), -musite, frac_coords=True, to_unit_cell=False
             )
             inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
+            if self.ctx.hubbardu_dict and not isinstance(self.ctx.structure,HubbardStructureData):
+                inputs.pw.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=rlx_st),self.ctx.hubbardu_dict)
             
             #MB: this should be done once for all, put here just for convenience
             inputs.pw.pseudos = get_pseudos(
             inputs.pw.structure, self.inputs.pseudo_family.value
             )
+            
+            inputs.pop("pseudo_family", None)
             
             # Set the `CALL` link label
             inputs.metadata.call_link_label = f'mu_origin_supercell_{j_index:02d}'
@@ -1211,7 +1252,7 @@ def compute_dipolar_field(
 
 
 #Creates the _overrides used in the protocols and in the forcing inputs step.
-def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
+def get_override_dict(structure, kpoints_distance, charge_supercell,magmom,hubbard):
     _overrides = {
             "base": {
                 "kpoints_distance": kpoints_distance,
@@ -1256,16 +1297,16 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
     else:
         start_mg_dict = None
 
-    # HUBBARD
+    '''# HUBBARD
     # check and assign hubbard u
     inpt_st = structure.get_pymatgen_structure()
     ##TO DO:put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard.
     rst_u = check_get_hubbard_u_parms(inpt_st)
     hubbardu_dict = rst_u 
-    if hubbardu_dict:
+    if hubbardu_dict and hubbard:
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u"] = True
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u_kind"] = 0
-        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict
+        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict'''
         
     return _overrides, start_mg_dict, structure
 
@@ -1295,14 +1336,14 @@ def recursive_consistency_check(input_dict,_):
     
     inconsistency_sentence = ''
     
-    #Hubbard validation in the structure:
+    '''#Hubbard validation in the structure:
     hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
     if hubbard_params is not None:
         if "hubbard" not in y.get_defined_properties() or y.hubbard.parameters == []:
             if structure.is_stored:
                 inconsistency_sentence+="The structure you provided as input is stored but requires hubbard parameters. Please define a new StructureData instance with also hubbard parameters according to this: \n{hubbard_params}."
             else:
-                inconsistency_sentence+="The structure you provided as input requires hubbard parameters. Please define hubbard parameters according to this: \n{hubbard_params}."
+                inconsistency_sentence+="The structure you provided as input requires hubbard parameters. Please define hubbard parameters according to this: \n{hubbard_params}."'''
         
     #QE inputs validation:
     keys = ["tot_charge","nspin","occupations","smearing"]
