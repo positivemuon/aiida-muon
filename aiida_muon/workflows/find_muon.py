@@ -37,12 +37,12 @@ MusconvWorkChain = WorkflowFactory('musconv')
 def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
     hubbard_structure = HubbardStructureData.from_structure(structure)
     for kind, U in hubbard_dict.items():
-        hubbard_structure. initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+        hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
     return hubbard_structure
 
 def assign_hubbard_parameters(hubbard_structure, hubbard_dict):
     for kind, U in hubbard_dict.items():
-        hubbard_structure. initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+        hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
 
 def MusconvWorkChain_override_validator(inputs,ctx=None):
     """validate inputs for musconv.relax; actually, it is
