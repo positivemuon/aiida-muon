@@ -314,7 +314,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                     print("done. Inspect structure.hubbard")
                 else:
-                    print("The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
+                    print(f"The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
                     for kind, U in hubbard_params.items():
                         structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                     print("done. Inspect structure.hubbard")  
@@ -1243,7 +1243,7 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
     ##TO DO:put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard.
     rst_u = check_get_hubbard_u_parms(inpt_st)
     hubbardu_dict = rst_u 
-    if hubbardu_dict:
+    if hubbardu_dict and isinstance(structure, LegacyStructureData):
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u"] = True
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u_kind"] = 0
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict
@@ -1279,7 +1279,7 @@ def recursive_consistency_check(input_dict,_):
     #Hubbard validation in the structure:
     hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
     if hubbard_params is not None:
-        if "hubbard" not in y.get_defined_properties() or y.hubbard.parameters == []:
+        if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
             if structure.is_stored:
                 inconsistency_sentence+="The structure you provided as input is stored but requires hubbard parameters. Please define a new StructureData instance with also hubbard parameters according to this: \n{hubbard_params}."
             else:
