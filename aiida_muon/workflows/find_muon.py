@@ -330,7 +330,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
         
-        _overrides, start_mg_dict, structure = get_override_dict(structure, kpoints_distance, charge_supercell, magmom)
+        _overrides, start_mg_dict, structure = get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom)
         
         overrides = recursive_merge(overrides,_overrides)
         
@@ -375,7 +375,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 structure,
                 protocol=protocol,
                 overrides=overrides.get("base",None),
-                pseudo_family=pseudo_family,
                 **kwargs,
                 )
         
@@ -386,7 +385,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 structure,
                 protocol=protocol,
                 overrides=overrides,
-                pseudo_family=pseudo_family,
                 relax_type=RelaxType.POSITIONS,
                 **kwargs,
                 )
@@ -683,7 +681,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     inputs.structure.magnetization.set_from_components(
                         magnetic_moment_per_kind=self.ctx.structure.magnetization.collinear_kind_moments,
                         coordinates="collinear")
-                assign_hubbard_parameters(inputs.structure, self.ctx.hubbardu_dict)
+                if self.ctx.hubbardu_dict:
+                    assign_hubbard_parameters(inputs.structure, self.ctx.hubbardu_dict)
             elif self.ctx.hubbardu_dict and not isinstance(inputs.structure,HubbardStructureData):
                 inputs.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=supercell_list[i_index]),self.ctx.hubbardu_dict)
                 
@@ -858,7 +857,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     inputs.pw.structure.magnetization.set_from_components(
                         magnetic_moment_per_kind=self.ctx.structure.magnetization.collinear_kind_moments,
                         coordinates="collinear")
-                assign_hubbard_parameters(inputs.pw.structure, self.ctx.hubbardu_dict)
+                if self.ctx.hubbardu_dict:
+                    assign_hubbard_parameters(inputs.pw.structure, self.ctx.hubbardu_dict)
             elif self.ctx.hubbardu_dict and not isinstance(inputs.pw.structure,HubbardStructureData):
                 inputs.pw.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=rlx_st),self.ctx.hubbardu_dict)
             
@@ -1239,9 +1239,10 @@ def compute_dipolar_field(
 
 
 #Creates the _overrides used in the protocols and in the forcing inputs step.
-def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
+def get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom):
     _overrides = {
-            "base": {
+           "base": {
+                "pseudo_family": pseudo_family,
                 "kpoints_distance": kpoints_distance,
                 "pw": {
                     "parameters": {
@@ -1263,7 +1264,7 @@ def get_override_dict(structure, kpoints_distance, charge_supercell,magmom):
                 },
                 },
             },
-            "base_final_scf": {},
+            "base_final_scf": {"pseudo_family": pseudo_family,},
             "clean_workdir": orm.Bool(True),
         }
 
@@ -1319,7 +1320,7 @@ def recursive_consistency_check(input_dict,_):
     #check hubbard here ore somewhere else. 
     
     parameters = copy.deepcopy(input_dict)
-    _overrides, start_mg_dict, structure = get_override_dict(parameters["structure"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None))
+    _overrides, start_mg_dict, structure = get_override_dict(parameters["structure"],parameters["pseudo_family"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None))
     
     inconsistency_sentence = ''
     
