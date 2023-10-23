@@ -40,9 +40,9 @@ def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
         hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
     return hubbard_structure
 
-def assign_hubbard_parameters(hubbard_structure, hubbard_dict):
+def assign_hubbard_parameters(structure: StructureData, hubbard_dict):
     for kind, U in hubbard_dict.items():
-        hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+        structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
 
 def MusconvWorkChain_override_validator(inputs,ctx=None):
     """validate inputs for musconv.relax; actually, it is
@@ -510,6 +510,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 self.ctx.magmom = self.ctx.structure.get_property_attribute("magnetization")["moments"]
         elif "magmom" in self.inputs:
             self.ctx.magmom = self.inputs.magmom.get_list()
+            
+        # check and get hubbard u
+        # AAA compatibility only with qe>=7.1 and old StructureData; new Hubbard format.
+        if self.inputs.hubbard_u: # and not isinstance(self.ctx.structure,HubbardStructureData) and isinstance(self.ctx.structure,LegacyStructureData):
+            inpt_st = self.ctx.structure.get_pymatgen_structure()
+            rst_u = check_get_hubbard_u_parms(inpt_st)
+            self.ctx.hubbardu_dict = rst_u
+            #self.ctx.structure = create_hubbard_structure(self.ctx.structure,self.ctx.hubbardu_dict)
+            
         return
             
 
@@ -555,14 +564,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             self.ctx.start_mg_dict = rst_mg["start_mag_dict"]
         else:
             self.ctx.structure = self.inputs.structure
-
-        # check and get hubbard u
-        # AAA compatibility only with qe>=7.1 and old StructureData; new Hubbard format.
-        if self.inputs.hubbard_u and not isinstance(self.ctx.structure,HubbardStructureData) and isinstance(self.ctx.structure,LegacyStructureData):
-            inpt_st = self.ctx.structure.get_pymatgen_structure()
-            rst_u = check_get_hubbard_u_parms(inpt_st)
-            self.ctx.hubbardu_dict = rst_u
-            #self.ctx.structure = create_hubbard_structure(self.ctx.structure,self.ctx.hubbardu_dict)
 
     def get_initial_supercell_structures(self):
         """Get initial supercell+muon list"""
@@ -630,18 +631,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         )
         if self.inputs.charge_supercell:
         #
-        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'CONTROL':{'nstep': 200}})
-        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'smearing': 'gaussian'}})
-        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'electron_maxstep': 300}})
-        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'mixing_beta': 0.30}})
-        # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
-        # overrides['base_final_scf']['pw']['metadata'] = recursive_merge(overrides['base_final_scf']['pw']['metadata'], {'description': 'Muon site calculations for '+self.inputs.structure.get_pymatgen_structure().formula})
-
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"tot_charge": 1.0}}
             )
-            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'tot_charge': 1.0}})
-
         # if self.inputs.magmom is not None:
         #MB this should be automatically done in the new implementation with the MagneticStructureData.
         if "magmom" in self.inputs and self.ctx.start_mg_dict:
@@ -656,27 +648,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     }
                 },
             )
-            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'nspin': 2}})
-            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'starting_magnetization': self.ctx.start_mg_dict.get_dict()}})
-
-        # check and assign hubbard u
-        # MB this should be automatically done in the new implementation, at least at the protocol generation level.
-        '''if "hubbardu_dict" in self.ctx:
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"], {"SYSTEM": {"lda_plus_u": True}}
-            )
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"],
-                {"SYSTEM": {"lda_plus_u_kind": 0}},
-            )
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"],
-                {"SYSTEM": {"Hubbard_U": self.ctx.hubbardu_dict}},
-            )'''
-            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'lda_plus_u': True}})
-            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'lda_plus_u_kind': 0}})
-            # overrides['base_final_scf']['pw']['parameters'] = recursive_merge(overrides['base_final_scf']['pw']['parameters'], {'SYSTEM':{'Hubbard_U': self.ctx.hubbardu_dict}})
-
 
         self.ctx.overrides = overrides
 
@@ -703,9 +674,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         for i_index in range(len(supercell_list)):
             
             inputs.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
-            if self.ctx.hubbardu_dict and not isinstance(self.ctx.structure,HubbardStructureData):
+            if isinstance(inputs.structure,StructureData):
+                """
+                The order of magnetization setting and hubbard does matter. The reason is that
+                hubbard qe cards are defined in terms of the atom site index.  
+                """
+                if "magnetization" in self.ctx.structure.get_defined_properties():
+                    inputs.structure.magnetization.set_from_components(
+                        magnetic_moment_per_kind=self.ctx.structure.magnetization.collinear_kind_moments,
+                        coordinates="collinear")
+                assign_hubbard_parameters(inputs.structure, self.ctx.hubbardu_dict)
+            elif self.ctx.hubbardu_dict and not isinstance(inputs.structure,HubbardStructureData):
                 inputs.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=supercell_list[i_index]),self.ctx.hubbardu_dict)
-            
+                
             
             #MB: this should be done once for all, put here just for convenience
             inputs.base.pw.pseudos = get_pseudos(
@@ -872,7 +853,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 range(rlx_st.num_sites), -musite, frac_coords=True, to_unit_cell=False
             )
             inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
-            if self.ctx.hubbardu_dict and not isinstance(self.ctx.structure,HubbardStructureData):
+            if isinstance(inputs.pw.structure,StructureData):
+                if "magnetization" in self.ctx.structure.get_defined_properties():
+                    inputs.pw.structure.magnetization.set_from_components(
+                        magnetic_moment_per_kind=self.ctx.structure.magnetization.collinear_kind_moments,
+                        coordinates="collinear")
+                assign_hubbard_parameters(inputs.pw.structure, self.ctx.hubbardu_dict)
+            elif self.ctx.hubbardu_dict and not isinstance(inputs.pw.structure,HubbardStructureData):
                 inputs.pw.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=rlx_st),self.ctx.hubbardu_dict)
             
             #MB: this should be done once for all, put here just for convenience
