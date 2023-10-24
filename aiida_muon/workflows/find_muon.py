@@ -243,7 +243,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.collect_all_results,
             ),
             if_(cls.structure_is_magnetic)(
-                if_(cls.spin_polarized)(
+                if_(cls.spin_polarized_dft)(
                     cls.run_final_scf_mu_origin,  # to be removed if better alternative
                     cls.compute_spin_density,
                     cls.inspect_get_contact_hyperfine,
@@ -447,6 +447,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.charge_supercell=orm.Bool(charge_supercell)
         builder.kpoints_distance = orm.Float(kpoints_distance)
         builder.hubbard_u = orm.Bool(hubbard)
+        builder.spin_pol_dft = orm.Bool(spin_pol_dft)
         
         # PpCalculation inputs: Only this, the rest is really default... 
         # I think is ok to be set on the fly later for now, but we can discuss.
@@ -493,11 +494,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         inputs.metadata.call_link_label = f'MusConvWorkchain'
         future = self.submit(MusconvWorkChain, **inputs)
-        key = "MusconvWorkchain"
+        # key = f'workchains.sub{i_index}' #nested sub
         self.report(
-            f"Launching MusconvWorkchain (PK={future.pk}) for  structure {self.inputs.structure.get_pymatgen_structure().formula}"
+            f"Launching MusconvWorkChain (PK={future.pk}) for supercell matrix determination"
         )
-        self.to_context(**{key: future})
+        self.to_context(**{"MusconvWorkchain": future})
 
     def check_supercell_convergence(self):
         """check if finished_ok"""
@@ -583,6 +584,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         supercell_list = gensup(input_struct, muon_list, self.ctx.sc_matrix)  # ordinary function
         if len(supercell_list) == 0:
+            self.report("No Supercells, please decrease the mu_spacing parameter. Exiting the workflow...")
             return self.exit_codes.ERROR_NO_SUPERCELLS
             
         self.ctx.supc_list = supercell_list
@@ -816,7 +818,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
     def structure_is_magnetic(self):
         """Checking if structure is magnetic"""
-        self.report("Checking if structure is magnetic ")
+        self.report("Checking if structure is magnetic")
 
         # return self.inputs.magmom is not None
         # return 'magmom' in self.inputs
@@ -989,14 +991,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
     def get_dipolar_field(self):
         unique_cluster_list = self.ctx.unique_cluster
-        cnt_field_dict = self.ctx.cont_hf.get_dict()
+        if self.inputs.spin_pol_dft: cnt_field_dict = self.ctx.cont_hf.get_dict()
         dip_results = []
         for j_index, clus in enumerate(unique_cluster_list):
             #
             # rlx_st = clus['rlxd_struct']
             rlx_st = Structure.from_dict(clus["rlxd_struct"])
             rlx_struct = self.ctx.structure_type(pymatgen=rlx_st)
-            if self.inputs.spin_pol_dft:
+            if not self.inputs.spin_pol_dft:
                 cnt_field = 0
             else:
                 cnt_field = cnt_field_dict[str(clus["idx"])][1]
@@ -1340,7 +1342,7 @@ def recursive_consistency_check(input_dict,_):
     #check hubbard here ore somewhere else. 
     
     parameters = copy.deepcopy(input_dict)
-    _overrides, start_mg_dict, structure = get_override_dict(parameters["structure"],parameters["pseudo_family"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None))
+    _overrides, start_mg_dict, structure = get_override_dict(parameters["structure"],parameters["pseudo_family"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None),parameters.pop("spin_pol_dft",None))
     
     inconsistency_sentence = ''
     
