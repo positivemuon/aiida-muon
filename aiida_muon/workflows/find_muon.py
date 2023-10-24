@@ -351,21 +351,22 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             if hubbard_params is not None:
                 if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
                     if structure.is_stored:
-                        print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
+                        #print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
                         structure = structure.clone()
                         for kind, U in hubbard_params.items():
                             structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                        print("done. Inspect structure.hubbard")
+                        #print("done. Inspect structure.hubbard")
                     else:
-                        print(f"The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
+                        #print(f"The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
                         for kind, U in hubbard_params.items():
                             structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                        print("done. Inspect structure.hubbard")  
+                        #print("done. Inspect structure.hubbard")  
         elif isinstance(structure,HubbardStructureData):
-            print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
-            for kind, U in hubbard_params.items():
-                structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-            print("done. Inspect structure.hubbard")  
+            #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
+            if hubbard_params is not None:
+                for kind, U in hubbard_params.items():
+                    structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                #print("done. Inspect structure.hubbard")  
                     
         
         #TODO: cleanup, too much pop, loops...
