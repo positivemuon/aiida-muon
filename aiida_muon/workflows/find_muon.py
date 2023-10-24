@@ -106,6 +106,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         )
         
         spec.input(
+            "spin_pol_dft",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(True),
+            required=False,
+            help="Spin-polarised DFT simulation or not",
+        )
+        
+        spec.input(
             "mag_dict",
             valid_type=orm.Dict,
             required=False,
@@ -235,11 +243,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.collect_all_results,
             ),
             if_(cls.structure_is_magnetic)(
-                cls.run_final_scf_mu_origin,  # to be removed if better alternative
-                cls.compute_spin_density,
-                cls.inspect_get_contact_hyperfine,
+                if_(cls.spin_polarized)(
+                    cls.run_final_scf_mu_origin,  # to be removed if better alternative
+                    cls.compute_spin_density,
+                    cls.inspect_get_contact_hyperfine,
+                ),
                 cls.get_dipolar_field,
-                cls.set_hyperfine_outputs,
+                cls.set_field_outputs,
             ),
             cls.set_relaxed_muon_outputs,
         )
@@ -308,6 +318,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         kpoints_distance: float =0.301,
         charge_supercell: bool =True,
         hubbard: bool = True,
+        spin_pol_dft: bool = True,
         pseudo_family: str ="SSSP/1.2/PBE/efficiency",
         **kwargs,
     ):
@@ -330,7 +341,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
         
-        _overrides, start_mg_dict, structure = get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom)
+        _overrides, start_mg_dict, structure = get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft)
         
         overrides = recursive_merge(overrides,_overrides)
         
@@ -677,7 +688,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 The order of magnetization setting and hubbard does matter. The reason is that
                 hubbard qe cards are defined in terms of the atom site index.  
                 """
-                if "magnetization" in self.ctx.structure.get_defined_properties():
+                if "magnetization" in self.ctx.structure.get_defined_properties() and self.inputs.spin_pol_dft.value:
                     inputs.structure.magnetization.set_from_components(
                         magnetic_moment_per_kind=self.ctx.structure.magnetization.collinear_kind_moments,
                         coordinates="collinear")
@@ -814,6 +825,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         else:
             if "magmom" in self.inputs:
                 return self.inputs.magmom is not None
+            
+    def spin_polarized_dft(self):
+        """Checking if we need spin polarization in DFT"""
+        self.report(f"Checking if we need spin polarization in DFT: {self.inputs.spin_pol_dft.value}")
+        return self.inputs.spin_pol_dft.value
 
     # scf first then pp.x ! TODO: NOT NECESSARY REMOVE ON REVISIT
 
@@ -853,7 +869,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             )
             inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
             if isinstance(inputs.pw.structure,StructureData):
-                if "magnetization" in self.ctx.structure.get_defined_properties():
+                if "magnetization" in self.ctx.structure.get_defined_properties() and self.inputs.spin_pol_dft.value:
                     inputs.pw.structure.magnetization.set_from_components(
                         magnetic_moment_per_kind=self.ctx.structure.magnetization.collinear_kind_moments,
                         coordinates="collinear")
@@ -980,7 +996,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             # rlx_st = clus['rlxd_struct']
             rlx_st = Structure.from_dict(clus["rlxd_struct"])
             rlx_struct = self.ctx.structure_type(pymatgen=rlx_st)
-            cnt_field = cnt_field_dict[str(clus["idx"])][1]
+            if self.inputs.spin_pol_dft:
+                cnt_field = 0
+            else:
+                cnt_field = cnt_field_dict[str(clus["idx"])][1]
             print(cnt_field)
             b_field = compute_dipolar_field(
                 self.inputs.structure,
@@ -1004,11 +1023,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.dipolar_dict = orm.List(dip_results)
         print("dipolar_results ", dip_results)
 
-    def set_hyperfine_outputs(self):
+    def set_field_outputs(self):
         """outputs"""
-        self.report("Setting hypferfine Outputs")
+        self.report("Setting field outputs")
         # self.out('unique_sites_hyperfine', get_list(self.ctx.cont_hf))
-        self.out("unique_sites_hyperfine", self.ctx.cont_hf)
+        if self.inputs.spin_pol_dft:
+            self.out("unique_sites_hyperfine", self.ctx.cont_hf)
         self.out("unique_sites_dipolar", self.ctx.dipolar_dict)
 
     def set_relaxed_muon_outputs(self):
@@ -1239,7 +1259,7 @@ def compute_dipolar_field(
 
 
 #Creates the _overrides used in the protocols and in the forcing inputs step.
-def get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom):
+def get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft):
     _overrides = {
            "base": {
                 "pseudo_family": pseudo_family,
@@ -1272,7 +1292,7 @@ def get_override_dict(structure, pseudo_family, kpoints_distance, charge_superce
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
         
     # MAGMOMS       
-    if magmom: # drop this... correct ?and not hasattr(structure, "magnetic"):
+    if magmom and spin_pol_dft: # drop this... correct ?and not hasattr(structure, "magnetic"):
         rst_mg = make_collinear_getmag_kind(
             structure, magmom,
         )
