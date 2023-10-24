@@ -647,7 +647,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             )
         # if self.inputs.magmom is not None:
         #MB this should be automatically done in the new implementation with the MagneticStructureData.
-        if "magmom" in self.inputs and self.ctx.start_mg_dict:
+        if "magmom" in self.inputs and self.ctx.start_mg_dict and self.inputs.spin_pol_dft:
             overrides["base"]["pw"]["parameters"] = recursive_merge(
                 overrides["base"]["pw"]["parameters"], {"SYSTEM": {"nspin": 2}}
             )
