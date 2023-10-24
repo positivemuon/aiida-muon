@@ -310,7 +310,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         pp_code: orm.Code = None,
         protocol: str =None,
         overrides: dict = {},
-        relax_musconv: bool =False,
+        relax_unitcell: bool =False,
         magmom: list = None,
         options=None,
         sc_matrix: list =None,
@@ -376,7 +376,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 pw_code = pw_code,
                 structure = structure,
                 pseudo_family = pseudo_family,
-                relax_unitcell = relax_musconv,
+                relax_unitcell = relax_unitcell,
                 )
         
         #builder_musconv.pop('structure', None)
@@ -426,7 +426,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.pwscf = builder_pwscf
         builder.relax = builder_relax
         
-        #if not relax_musconv: builder.musconv.pop('relax')
+        #if not relax_unitcell: builder.musconv.pop('relax')
         builder.musconv.pop('structure')
         
         #useful to be used in overrides in the workflow. to be removed when new StructureData
