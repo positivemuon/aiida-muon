@@ -909,7 +909,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #MB: if "pp.metadata" in self.inputs:
         if hasattr(self.inputs,"pp_metadata"):
             pp_builder.metadata = self.inputs.pp_metadata #.get_dict()
-
+        #MB: the following should not be done, but for aiidalab qe app we need intranode only:
+        if pp_builder.metadata.options.resources.num_machines > 1:
+            pp_builder.metadata.options.resources.num_machines = 1
 
         parameters = orm.Dict(
             dict={
