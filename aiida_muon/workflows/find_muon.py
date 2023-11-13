@@ -910,8 +910,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if hasattr(self.inputs,"pp_metadata"):
             pp_builder.metadata = self.inputs.pp_metadata #.get_dict()
         #MB: the following should not be done, but for aiidalab qe app we need intranode only:
-        if pp_builder.metadata.options.resources.num_machines > 1:
-            pp_builder.metadata.options.resources.num_machines = 1
+        if pp_builder.metadata['options']['resources']['num_machines'] > 1:
+            pp_builder.metadata['options']['resources']['num_machines'] = 1
 
         parameters = orm.Dict(
             dict={
@@ -1281,6 +1281,7 @@ def get_override_dict(structure, pseudo_family, kpoints_distance, charge_superce
                 "ELECTRONS": {
                     "electron_maxstep": 300,
                     "mixing_beta": 0.30,
+                    'conv_thr': 1.0e-6,
                 },
                 },
                     "metadata": {
