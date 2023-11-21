@@ -220,10 +220,6 @@ def find_equivalent_positions(
                  2. change `energies` into `scalar_value` to make it more general.
     
     """
-    '''
-    Miki Bonacci: should be more compact.
-    '''
-
 
     lattice = host_lattice.lattice
     # Bring to unit cell

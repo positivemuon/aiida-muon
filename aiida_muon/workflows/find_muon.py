@@ -607,7 +607,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #'final_scf' : orm.Bool(False),
             "base": {
                 "kpoints_distance": orm.Float(self.inputs.kpoints_distance.value),
-                "pseudo_family":self.inputs.pseudo_family,
+                #"pseudo_family":self.inputs.pseudo_family,
                 "pw": {
                     "parameters": {},
                     "metadata": {},
@@ -1141,9 +1141,7 @@ def niche_add_impurities(
 
 
 # Do we really need to keep this in the provenance?
-'''
-Miki Bonacci: I think yes, so we can track the provenance to the starting StructureData? 
-'''
+
 def gensup(p_st, mu_list, sc_mat):
     """
     This makes the supercell with the given SC matrix.
@@ -1267,7 +1265,7 @@ def compute_dipolar_field(
 def get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft):
     _overrides = {
            "base": {
-                "pseudo_family": pseudo_family,
+                #"pseudo_family": pseudo_family,
                 "kpoints_distance": kpoints_distance,
                 "pw": {
                     "parameters": {
@@ -1290,7 +1288,7 @@ def get_override_dict(structure, pseudo_family, kpoints_distance, charge_superce
                 },
                 },
             },
-            "base_final_scf": {"pseudo_family": pseudo_family,},
+            #"base_final_scf": {"pseudo_family": pseudo_family,},
             "clean_workdir": orm.Bool(True),
         }
 
