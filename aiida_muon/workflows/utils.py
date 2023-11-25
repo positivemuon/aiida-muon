@@ -487,7 +487,10 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
 
     # remove initial muon position from prist_stc
     # prist_stc.pop()
-    prist_stc.remove_sites([prist_stc.atomic_numbers.index(1)])
+    # MB I do this if because after the first loop th prist_stc has no more the H,
+    # so doing the remove_sites will cause exception.
+    if len(rlxd_stc.frac_coords) + 1 == len(prist_stc.frac_coords):
+    	prist_stc.remove_sites([prist_stc.atomic_numbers.index(1)])
 
     assert len(rlxd_stc.frac_coords) == len(prist_stc.frac_coords)
 
@@ -502,6 +505,19 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
 
     # get and transform displacement vectors
     disp = rlxd_stc.frac_coords - prist_stc.frac_coords
+    
+    # MB: if len(symm_op)<2, the "t_disp" variable assignement will except; so we will exit here with None and put some
+    #     other code in the findmuon workchain to deal with this.
+    if len(symm_op)<2:
+        return None
+    
+    # MB: same arguments for the following if
+    if len(opg)-1 < symm_op[1]:
+        return None
+
+    
+    symm_op[1]
+    opg[symm_op[1]]
     t_disp = opg[symm_op[1]].operate_multi(disp)
 
     ##instead get  disp with transforming atoms

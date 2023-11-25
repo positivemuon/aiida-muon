@@ -1229,7 +1229,7 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
                     nw_st = get_struct_wt_distortions(
                         init_supc, scst, nwp[1], st_smag
                     )
-                    nw_stc_calc.append(nw_st)
+                    if nw_st: nw_stc_calc.append(nw_st)
 
     uniq_clus_pos = []
     for i, clus in enumerate(clus_pos):
