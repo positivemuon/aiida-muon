@@ -27,7 +27,8 @@ dependencies = [
     "spglib>=1.9",
     "pyyaml>=3.0",
     "mulfc>=0.0.1",
-    "muesr",
+    "muesr @ git+https://github.com/bonfus/muesr@master"
+    #"muesr",
     #"aiida-musconv @ git+https://github.com/positivemuon/aiida-musconv@dev_protocols#egg=aiida-musconv"
 ]
 
