@@ -27,9 +27,9 @@ dependencies = [
     "spglib>=1.9",
     "pyyaml>=3.0",
     "mulfc>=0.0.1",
-    "muesr @ git+https://github.com/bonfus/muesr@master"
-    #"muesr",
-    #"aiida-musconv @ git+https://github.com/positivemuon/aiida-musconv@dev_protocols#egg=aiida-musconv"
+    "muesr @ git+https://github.com/bonfus/muesr@master",
+    "aiida-atomistic @ git+https://github.com/aiidateam/aiida-atomistic.git@new_Data",
+    "aiida-musconv @ git+https://github.com/positivemuon/aiida-musconv@dev_StructureData#egg=aiida-musconv"
 ]
 
 [project.urls]
