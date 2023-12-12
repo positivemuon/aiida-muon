@@ -628,10 +628,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # overrides['base']['pw']['parameters'] = recursive_merge(overrides['base']['pw']['parameters'], {'SYSTEM':{'smearing': 'gaussian'}})
         overrides["base"]["pw"]["parameters"] = recursive_merge(
             overrides["base"]["pw"]["parameters"],
-            {"ELECTRONS": {"electron_maxstep": 300}},
+            {"ELECTRONS": {"electron_maxstep": 500}},
         )
         overrides["base"]["pw"]["parameters"] = recursive_merge(
-            overrides["base"]["pw"]["parameters"], {"ELECTRONS": {"mixing_beta": 0.30}}
+            overrides["base"]["pw"]["parameters"], {"ELECTRONS": {"mixing_mode": "local-TF"}}
         )
         # overrides['base']['pw']['parameters'] = recursive_merge(overrides['base']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
         overrides["base"]["pw"]["metadata"] = recursive_merge(
@@ -1278,8 +1278,8 @@ def get_override_dict(structure, pseudo_family, kpoints_distance, charge_superce
                     "smearing": "gaussian",
                     "degauss": 0.01,},
                 "ELECTRONS": {
-                    "electron_maxstep": 300,
-                    "mixing_beta": 0.30,
+                    "electron_maxstep": 500,
+                    "mixing_mode": "local-TF",
                     'conv_thr': 1.0e-6,
                 },
                 },
