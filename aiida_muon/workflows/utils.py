@@ -641,7 +641,7 @@ def compute_dip_field(p_st, magm, sc_mat, r_supst, cnt_field):
     r_f_ps = locfield(smp, "s", [50, 50, 50], radius)
 
     # compute B only within the supercell  using the pristine structre,
-    #TO include muon induced relaxation effects
+    # To include muon induced relaxation effects
     radius_n=np.min(r_supst.lattice.abc)
     r_s_ps = locfield(smp, "s", [50, 50, 50], radius_n)
 
