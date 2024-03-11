@@ -29,7 +29,7 @@ dependencies = [
     "mulfc>=0.0.1",
     "muesr @ git+https://github.com/bonfus/muesr@master",
     "aiida-atomistic @ git+https://github.com/aiidateam/aiida-atomistic.git@new_Data",
-    "aiida-musconv @ git+https://github.com/positivemuon/aiida-musconv@dev_StructureData#egg=aiida-musconv"
+    "aiida-impuritysupercellconv @ git+https://github.com/positivemuon/aiida-impuritysupercellconv@new_name/dev_StructureData#egg=aiida-impuritysupercellconv"
 ]
 
 [project.urls]

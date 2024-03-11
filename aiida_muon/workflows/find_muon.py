@@ -13,7 +13,7 @@ from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from typing import Union
 
-from aiida_musconv.workflows.musconv import input_validator as musconv_input_validator
+from aiida_impuritysupercellconv.workflows.impuritysupercellconv import input_validator as impuritysupercellconv_input_validator
 
 from aiida.orm import StructureData as LegacyStructureData
 from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
@@ -31,7 +31,7 @@ from .utils import (
 StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
-MusconvWorkChain = WorkflowFactory('musconv')
+MusconvWorkChain = WorkflowFactory('impuritysupercellconv')
 
 @calcfunction
 def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
@@ -45,14 +45,14 @@ def assign_hubbard_parameters(structure: StructureData, hubbard_dict):
         structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
 
 def MusconvWorkChain_override_validator(inputs,ctx=None):
-    """validate inputs for musconv.relax; actually, it is
+    """validate inputs for impuritysupercellconv.relax; actually, it is
     just a way to avoid defining it if we do not want it. 
     otherwise the default check is done and it will excepts. 
     """
-    if "musconv" in inputs.keys():
-        if "parameters" in inputs["musconv"]["pwscf"]["pw"].keys():
-            if len(inputs["musconv"]["pwscf"]["pw"]["parameters"].get_dict()):
-                original_MusconvWorkChain.spec().inputs.validator(inputs["musconv"],ctx)
+    if "impuritysupercellconv" in inputs.keys():
+        if "parameters" in inputs["impuritysupercellconv"]["pwscf"]["pw"].keys():
+            if len(inputs["impuritysupercellconv"]["pwscf"]["pw"]["parameters"].get_dict()):
+                original_MusconvWorkChain.spec().inputs.validator(inputs["impuritysupercellconv"],ctx)
             else:
                 return None
         else:
@@ -199,17 +199,17 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         )
 
         spec.input(
-            "musconv_metadata",
+            "impuritysupercellconv_metadata",
             valid_type=dict,
             non_db=True,
             required=False,
-            help=" Preferred metadata and scheduler options for musconv",
+            help=" Preferred metadata and scheduler options for impuritysupercellconv",
         )
 
         # activate MusconvWorkChain only if sc_matrix input not present.
         spec.expose_inputs(
             MusconvWorkChain,
-            namespace="musconv",
+            namespace="impuritysupercellconv",
             exclude=("structure", "pseudos",),
             namespace_options={
                 'required': False, 'populate_defaults': False,
@@ -285,7 +285,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         )
 
         # TODO: more exit codes catch errors and throw exit codes
-        #MB add exit code for the musconv.
+        #MB add exit code for the impuritysupercellconv.
 
         spec.output("all_index_uuid", valid_type=orm.Dict, required=True)
 
@@ -372,14 +372,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #TODO: cleanup, too much pop, loops...
         
         #### Musconv
-        builder_musconv = MusconvWorkChain.get_builder_from_protocol(
+        builder_impuritysupercellconv = MusconvWorkChain.get_builder_from_protocol(
                 pw_code = pw_code,
                 structure = structure,
                 pseudo_family = pseudo_family,
                 relax_unitcell = relax_unitcell,
                 )
         
-        #builder_musconv.pop('structure', None)
+        #builder_impuritysupercellconv.pop('structure', None)
         
         #### simple PwBase for final scf mu-origin
         builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
@@ -415,19 +415,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         #setting subworkflows inputs
         #probably, it is better to populate defaults and then pop if not needed, as done later.
-        for k,v in builder_musconv.items():
+        for k,v in builder_impuritysupercellconv.items():
             if k == "relax":
-                for k1,v1 in builder_musconv.relax.items():
+                for k1,v1 in builder_impuritysupercellconv.relax.items():
                     if k1 == "base_final_scf": continue
-                    setattr(builder.musconv.relax,k1,v1)
+                    setattr(builder.impuritysupercellconv.relax,k1,v1)
             else:
-                setattr(builder.musconv,k,v)
-        #builder.musconv = builder_musconv  If you use this instead of the above, it will give ValueError.
+                setattr(builder.impuritysupercellconv,k,v)
+        #builder.impuritysupercellconv = builder_impuritysupercellconv  If you use this instead of the above, it will give ValueError.
         builder.pwscf = builder_pwscf
         builder.relax = builder_relax
         
-        #if not relax_unitcell: builder.musconv.pop('relax')
-        builder.musconv.pop('structure')
+        #if not relax_unitcell: builder.impuritysupercellconv.pop('relax')
+        builder.impuritysupercellconv.pop('structure')
         
         #useful to be used in overrides in the workflow. to be removed when new StructureData
         if start_mg_dict: 
@@ -442,7 +442,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #we can set this also wrt to some protocol, TOBE discussed
         if sc_matrix: 
             builder.sc_matrix=orm.List(sc_matrix)
-            builder.pop('musconv')
+            builder.pop('impuritysupercellconv')
 
         builder.mu_spacing=orm.Float(mu_spacing)
         builder.charge_supercell=orm.Bool(charge_supercell)
@@ -454,7 +454,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # I think is ok to be set on the fly later for now, but we can discuss.
         if pp_code: builder.pp_code = pp_code
         
-        for i in ["pp_metadata","musconv_metadata","qe_settings"]:
+        for i in ["pp_metadata","impuritysupercellconv_metadata","qe_settings"]:
             if hasattr(overrides,i):
                 builder[i] = overrides[i]
         
@@ -474,7 +474,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.hubbardu_dict = None #needed to be defined.
 
     def not_converged_supercell(self):
-        """understand if musconv is needed: search for the sc_matrix in inputs."""
+        """understand if impuritysupercellconv is needed: search for the sc_matrix in inputs."""
         if hasattr(self.inputs,"sc_matrix"):
             self.ctx.sc_matrix = self.inputs.sc_matrix[0]
                     
@@ -482,16 +482,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
     
     def converge_supercell(self):
-        """call MusconvWorkchain"""
+        """call IsolatedImpurityWorkChain"""
 
-        inputs = AttributeDict(self.exposed_inputs(MusconvWorkChain, namespace='musconv'))
+        inputs = AttributeDict(self.exposed_inputs(MusconvWorkChain, namespace='impuritysupercellconv'))
         inputs.structure = self.inputs.structure
 
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
         
-        if hasattr(self.inputs,"musconv_metadata"):
-            inputs.pwscf.pw.metadata = self.inputs.musconv_metadata
+        if hasattr(self.inputs,"impuritysupercellconv_metadata"):
+            inputs.pwscf.pw.metadata = self.inputs.impuritysupercellconv_metadata
 
         inputs.metadata.call_link_label = f'MusConvWorkchain'
         future = self.submit(MusconvWorkChain, **inputs)
@@ -499,16 +499,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.report(
             f"Launching MusconvWorkChain (PK={future.pk}) for supercell matrix determination"
         )
-        self.to_context(**{"MusconvWorkchain": future})
+        self.to_context(**{"IsolatedImpurityWorkChain": future})
 
     def check_supercell_convergence(self):
         """check if finished_ok"""
 
-        if not self.ctx["MusconvWorkchain"].is_finished_ok:
+        if not self.ctx["IsolatedImpurityWorkChain"].is_finished_ok:
             return self.exit_codes.ERROR_MUSCONV_CALC_FAILED
         else:
             self.report("Found supercell")
-            self.ctx.sc_matrix = self.ctx["MusconvWorkchain"].outputs.Converged_SCmatrix.get_array('sc_mat')
+            self.ctx.sc_matrix = self.ctx["IsolatedImpurityWorkChain"].outputs.Converged_SCmatrix.get_array('sc_mat')
 
                 
     def setup(self):
@@ -1364,11 +1364,11 @@ def recursive_consistency_check(input_dict,_):
     wrong_inputs_relax = []
     wrong_inputs_pwscf = []
     
-    musconv_inconsistency = ''
-    if "musconv" in parameters:
-        musconv_inconsistency = musconv_input_validator(parameters["musconv"],None,caller="FindMuonWorkchain")
+    impuritysupercellconv_inconsistency = ''
+    if "impuritysupercellconv" in parameters:
+        impuritysupercellconv_inconsistency = impuritysupercellconv_input_validator(parameters["impuritysupercellconv"],None,caller="FindMuonWorkchain")
     
-    if musconv_inconsistency: inconsistency_sentence += musconv_inconsistency
+    if impuritysupercellconv_inconsistency: inconsistency_sentence += impuritysupercellconv_inconsistency
     
     if parameters["relax"]["base"]["pw"]["parameters"].get_dict()["CONTROL"]["calculation"] != 'relax':
         inconsistency_sentence+=f'Checking inputs.relax.base.pw.parameters.CONTROL.calculation: can be only "relax". No cell relaxation should be performed.'
