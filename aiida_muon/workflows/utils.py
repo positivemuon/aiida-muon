@@ -463,7 +463,7 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
 
 
 # revisit
-def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
+def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     """
     Translates displacement due to the muon from one muon to a
     magnetically inequivalent site.
@@ -472,10 +472,10 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
     This function assumes that H is the particle of interest.
     This is probably a problem when H atoms are already present.
     """
-    tol = 0.0001
+    tol = 0.001
 
     # get symmetry operations
-    spp = analyzer.SpacegroupAnalyzer(ipt_st_mag)
+    spp = analyzer.SpacegroupAnalyzer(ipt_st)
     ops = spp.get_symmetry_operations()
     # opsg = spp.get_space_group_operations()
     opg = spp.get_point_group_operations()
@@ -487,10 +487,7 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
 
     # remove initial muon position from prist_stc
     # prist_stc.pop()
-    # MB I do this if because after the first loop th prist_stc has no more the H,
-    # so doing the remove_sites will cause exception.
-    if len(rlxd_stc.frac_coords) + 1 == len(prist_stc.frac_coords):
-    	prist_stc.remove_sites([prist_stc.atomic_numbers.index(1)])
+    prist_stc.remove_sites([prist_stc.atomic_numbers.index(1)])
 
     assert len(rlxd_stc.frac_coords) == len(prist_stc.frac_coords)
 
@@ -505,20 +502,8 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st_mag):
 
     # get and transform displacement vectors
     disp = rlxd_stc.frac_coords - prist_stc.frac_coords
-    
-    # MB: if len(symm_op)<2, the "t_disp" variable assignement will except; so we will exit here with None and put some
-    #     other code in the findmuon workchain to deal with this.
-    if len(symm_op)<2:
-        return None
-    
-    # MB: same arguments for the following if
-    if len(opg)-1 < symm_op[1]:
-        return None
-
-    
-    symm_op[1]
-    opg[symm_op[1]]
-    t_disp = opg[symm_op[1]].operate_multi(disp)
+    #the list must contain a symm operation, if not there is an error somewhere not here
+    t_disp = opg[symm_op[0]].operate_multi(disp)
 
     ##instead get  disp with transforming atoms
     # t_disp2 = np.zeros([nw_stc.num_sites, 3])
