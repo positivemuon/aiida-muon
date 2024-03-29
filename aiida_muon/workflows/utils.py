@@ -505,20 +505,17 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     nw_stc = prist_stc.copy()
 
     # get and transform displacement vectors
-    if len(symm_op) > 0:
-        disp = rlxd_stc.frac_coords - prist_stc.frac_coords
-        t_disp = opg[symm_op[0]].operate_multi(disp)
-        
-        ##instead get  disp with transforming atoms
-        # t_disp2 = np.zeros([nw_stc.num_sites, 3])
-        for i in range(len(nw_stc)):
-            nw_stc.translate_sites(i, t_disp[i], frac_coords=True, to_unit_cell=False)
-            #
-            # new_rlx_pos=ops[symm_op[0]].operate(rlxd_stc[i].frac_coords)
-            # t_disp2[i] = new_rlx_pos - prist_stc[i].frac_coords
-            # nw_stc.translate_sites(i, t_disp2[i],frac_coords=True, to_unit_cell=False)
-    else:
-        print("Check symm op in get_struct_wt_distortions func, this should never happen")
+    disp = rlxd_stc.frac_coords - prist_stc.frac_coords
+    t_disp = opg[symm_op[0]].operate_multi(disp)
+
+    ##instead get  disp with transforming atoms
+    # t_disp2 = np.zeros([nw_stc.num_sites, 3])
+    for i in range(len(nw_stc)):
+        nw_stc.translate_sites(i, t_disp[i], frac_coords=True, to_unit_cell=False)
+        #
+        # new_rlx_pos=ops[symm_op[0]].operate(rlxd_stc[i].frac_coords)
+        # t_disp2[i] = new_rlx_pos - prist_stc[i].frac_coords
+        # nw_stc.translate_sites(i, t_disp2[i],frac_coords=True, to_unit_cell=False)
 
     nw_stc.append(
         species="H",
