@@ -1226,8 +1226,9 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
             for j, d in enumerate(rlxd_results):
                 if nwp[0] == d["idx"]:
                     scst = Structure.from_dict(d["rlxd_struct"])
+                    init_supc2 = init_supc.copy()
                     nw_st = get_struct_wt_distortions(
-                        init_supc, scst, nwp[1], st_smag
+                        init_supc2, scst, nwp[1], input_st
                     )
                     if nw_st: nw_stc_calc.append(nw_st)
 
