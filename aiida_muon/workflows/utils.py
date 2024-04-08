@@ -417,8 +417,9 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
     idx_list2 = idx_list[idx == np.arange(len(idx_list))]
 
     # Step 2
+    mu_list20 = mu_list2.copy()
     ieq = find_equivalent_positions(
-        mu_list2, p_smag, s_tol, energies=enrg_list, e_tol=e_tol
+        mu_list20, p_smag, s_tol, energies=enrg_list, e_tol=e_tol
     )
     mu_list3 = mu_list2[ieq == np.arange(len(mu_list2))]
     enrg_list3 = enrg_list2[ieq == np.arange(len(enrg_list2))]
@@ -437,11 +438,12 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
     new_pos_to_calc = []
     for i, pp in enumerate(mu_list3):
         # get all the equivalent positions with unitcell symmetry
-        pos = [x.operate(pp) % 1 for x in ops]
+        pos = [x.operate(pp) for x in ops]
         pos = np.unique(pos, axis=0)
 
         # find magnetically inequivalent in pos
-        ieq_l = find_equivalent_positions(pos, p_smag, atol=a_tol)
+        pos0 = pos.copy()
+        ieq_l = find_equivalent_positions(pos0, p_smag, atol=a_tol)
         pos2 = pos[ieq_l == np.arange(len(pos))]
 
         # if magnetically inequivalent pos. exists
@@ -493,7 +495,7 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     # get the symmetry operations that can transform mupos_rlx to n_mupos
     symm_op = []
     for i, op in enumerate(ops):
-        newp = op.operate(mupos_rlx) % 1
+        newp = op.operate(mupos_rlx)
         if np.all(np.abs(newp - n_mupos) < tol):
             symm_op.append(i)
 
