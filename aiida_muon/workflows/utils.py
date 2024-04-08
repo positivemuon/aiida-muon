@@ -465,6 +465,8 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
 # revisit
 def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     """
+    Experimental function!!!
+    
     Translates displacement due to the muon from one muon to a
     magnetically inequivalent site.
     Returns: Structure with translated displ and muon position
@@ -494,25 +496,27 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     # get the symmetry operations that can transform mupos_rlx to n_mupos
     symm_op = []
     for i, op in enumerate(ops):
-        newp = op.operate(mupos_rlx)
+        newp = op.operate(mupos_rlx) % 1
         if np.all(np.abs(newp - n_mupos) < tol):
             symm_op.append(i)
 
     nw_stc = prist_stc.copy()
 
     # get and transform displacement vectors
-    disp = rlxd_stc.frac_coords - prist_stc.frac_coords
-    #the list must contain a symm operation, if not there is an error somewhere not here
-    t_disp = opg[symm_op[0]].operate_multi(disp)
-
-    ##instead get  disp with transforming atoms
-    # t_disp2 = np.zeros([nw_stc.num_sites, 3])
-    for i in range(len(nw_stc)):
-        nw_stc.translate_sites(i, t_disp[i], frac_coords=True, to_unit_cell=False)
-        #
-        # new_rlx_pos=ops[symm_op[0]].operate(rlxd_stc[i].frac_coords)
-        # t_disp2[i] = new_rlx_pos - prist_stc[i].frac_coords
-        # nw_stc.translate_sites(i, t_disp2[i],frac_coords=True, to_unit_cell=False)
+    if len(symm_op) > 0:
+        disp = rlxd_stc.frac_coords - prist_stc.frac_coords
+        t_disp = opg[symm_op[0]].operate_multi(disp)
+        
+        ##instead get  disp with transforming atoms
+        # t_disp2 = np.zeros([nw_stc.num_sites, 3])
+        for i in range(len(nw_stc)):
+            nw_stc.translate_sites(i, t_disp[i], frac_coords=True, to_unit_cell=False)
+            #
+            # new_rlx_pos=ops[symm_op[0]].operate(rlxd_stc[i].frac_coords)
+            # t_disp2[i] = new_rlx_pos - prist_stc[i].frac_coords
+            # nw_stc.translate_sites(i, t_disp2[i],frac_coords=True, to_unit_cell=False)
+    else:
+        print("Check symm op in get_struct_wt_distortions func, this should never happen")
 
     nw_stc.append(
         species="H",
