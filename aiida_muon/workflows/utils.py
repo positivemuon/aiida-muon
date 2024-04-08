@@ -462,6 +462,8 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
 # revisit
 def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     """
+    Experimental Function!
+    
     Translates displacement due to the muon from one muon to a
     magnetically inequivalent site.
     Returns: Structure with translated displ and muon position
