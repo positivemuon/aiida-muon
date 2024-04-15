@@ -6,11 +6,9 @@ from muesr.engines.clfc import find_largest_sphere, locfield
 from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
-
+from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry import analyzer
 from pymatgen.util.coord import pbc_shortest_vectors
-from pymatgen.io.ase import AseAtomsAdaptor
-
 
 
 def get_collinear_mag_kindname(p_st, magm):
@@ -122,7 +120,7 @@ def check_get_hubbard_u_parms(p_st):
     suggestions:
         1. should we return {} instead of None ?
         2. should the list provided as input?
-        
+
     """
     # materials_project
     U_dict1 = {
@@ -157,7 +155,7 @@ def check_get_hubbard_u_parms(p_st):
         d_spc = list(set(spc))
 
     # 1 element compounds are not given any U values, 2 for the muon specie
-    if len(d_spc) > 2: # TODO: is this correct? Is it really needed?
+    if len(d_spc) > 2:  # TODO: is this correct? Is it really needed?
         hub_u = {}
         for spk in d_spc:
             # remove numbers from species name
@@ -214,9 +212,8 @@ def find_equivalent_positions(
 
     Suggestions:
                  2. change `energies` into `scalar_value` to make it more general.
-    
-    """
 
+    """
 
     lattice = host_lattice.lattice
     # Bring to unit cell
@@ -297,9 +294,9 @@ def prune_too_close_pos(
                  1. modify -1 into the index of the first atom that matched the conditions
                     on energy and distance.
                  2. change `energies` into `scalar_value` to make it more general.
-    
+
     """
-    
+
     # energies and tolerance should be in eV
     lattice = host_lattice.lattice
 
@@ -342,8 +339,8 @@ def get_poslist1_not_in_list2(pos_lst1, pos_lst2, host_lattice, d_tol=0.5):
 
     d_tol: float
            Absolute tolerance in Angstrom.
-    
-    
+
+
     Suggestion: this can be obtained with prune_too_close_pos.
     """
     lattice = host_lattice.lattice
@@ -465,7 +462,7 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
 def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     """
     Experimental Function!
-    
+
     Translates displacement due to the muon from one muon to a
     magnetically inequivalent site.
     Returns: Structure with translated displ and muon position
@@ -505,7 +502,7 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     if len(symm_op) > 0:
         disp = rlxd_stc.frac_coords - prist_stc.frac_coords
         t_disp = opg[symm_op[0]].operate_multi(disp)
-        
+
         ##instead get  disp with transforming atoms
         # t_disp2 = np.zeros([nw_stc.num_sites, 3])
         for i in range(len(nw_stc)):
@@ -515,8 +512,10 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
             # t_disp2[i] = new_rlx_pos - prist_stc[i].frac_coords
             # nw_stc.translate_sites(i, t_disp2[i],frac_coords=True, to_unit_cell=False)
     else:
-        print("Check symm op in get_struct_wt_distortions func, this should never happen")
-        
+        print(
+            "Check symm op in get_struct_wt_distortions func, this should never happen"
+        )
+
     nw_stc.append(
         species="H",
         coords=n_mupos,
@@ -639,7 +638,7 @@ def compute_dip_field(p_st, magm, sc_mat, r_supst, cnt_field):
 
     # compute B only within the supercell  using the pristine structre,
     # To include muon induced relaxation effects
-    radius_n=np.min(r_supst.lattice.abc)
+    radius_n = np.min(r_supst.lattice.abc)
     r_s_ps = locfield(smp, "s", [50, 50, 50], radius_n)
 
     # change the cell to the relaxed
