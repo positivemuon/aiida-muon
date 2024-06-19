@@ -78,7 +78,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         spec.input(
             "structure",
             valid_type=(StructureData, LegacyStructureData),
-            required=True,
+            required=False,
             help="Input initial structure",
         )
 
@@ -493,11 +493,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if hasattr(self.inputs,"impuritysupercellconv_metadata"):
             inputs.pwscf.pw.metadata = self.inputs.impuritysupercellconv_metadata
 
-        inputs.metadata.call_link_label = f'MusConvWorkchain'
+        inputs.metadata.call_link_label = f'IsolatedImpurityWorkChain'
         future = self.submit(MusconvWorkChain, **inputs)
         # key = f'workchains.sub{i_index}' #nested sub
         self.report(
-            f"Launching MusconvWorkChain (PK={future.pk}) for supercell matrix determination"
+            f"Launching IsolatedImpurityWorkChain (PK={future.pk}) for supercell matrix determination"
         )
         self.to_context(**{"IsolatedImpurityWorkChain": future})
 
