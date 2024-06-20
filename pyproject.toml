@@ -28,7 +28,7 @@ dependencies = [
     "pyyaml>=3.0",
     "mulfc>=0.0.1",
     "muesr @ git+https://github.com/bonfus/muesr@master",
-    "aiida-atomistic @ git+https://github.com/aiidateam/aiida-atomistic.git@new_Data",
+    "aiida-atomistic @ git+https://github.com/mikibonacci/aiida-atomistic.git@new_StructureData",
     "aiida-impuritysupercellconv @ git+https://github.com/positivemuon/aiida-impuritysupercellconv@new_name/dev_StructureData#egg=aiida-impuritysupercellconv"
 ]
 
