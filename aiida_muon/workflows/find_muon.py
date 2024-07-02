@@ -28,6 +28,8 @@ from .utils import (
     load_workchain_data,
 )
 
+from copy import copy
+
 StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
@@ -340,7 +342,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
-        
+                
         _overrides, start_mg_dict, structure = get_override_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft)
         
         overrides = recursive_merge(overrides,_overrides)
@@ -367,7 +369,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 #print("done. Inspect structure.hubbard")  
-                    
+        
+         
         
         #TODO: cleanup, too much pop, loops...
         
@@ -377,6 +380,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 structure = structure,
                 pseudo_family = pseudo_family,
                 relax_unitcell = relax_unitcell,
+                #charge_supercell=charge_supercell, # <== by default it is false.
+                overrides=overrides.pop("impuritysupercellconv",None),
                 )
         
         #builder_impuritysupercellconv.pop('structure', None)
@@ -385,6 +390,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
                 pw_code,
                 structure,
+                pseudo_family = pseudo_family,
                 protocol=protocol,
                 overrides=overrides.get("base",None),
                 **kwargs,
@@ -395,6 +401,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder_relax = PwRelaxWorkChain.get_builder_from_protocol(
                 pw_code,
                 structure,
+                pseudo_family = pseudo_family,
                 protocol=protocol,
                 overrides=overrides,
                 relax_type=RelaxType.POSITIONS,
@@ -455,8 +462,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if pp_code: builder.pp_code = pp_code
         
         for i in ["pp_metadata","impuritysupercellconv_metadata","qe_settings"]:
-            if hasattr(overrides,i):
-                builder[i] = overrides[i]
+            # I don't like this.
+            if i in overrides.keys():
+                builder[i] = overrides[i] 
+        
+        
         
         return builder
     
