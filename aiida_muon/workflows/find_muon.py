@@ -380,7 +380,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 structure = structure,
                 pseudo_family = pseudo_family,
                 relax_unitcell = relax_unitcell,
-                #charge_supercell=charge_supercell, # <== by default it is false.
+                charge_supercell=charge_supercell, # <== by default it is false.
                 overrides=overrides.pop("impuritysupercellconv",None),
                 )
         
@@ -486,7 +486,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def not_converged_supercell(self):
         """understand if impuritysupercellconv is needed: search for the sc_matrix in inputs."""
         if hasattr(self.inputs,"sc_matrix"):
-            self.ctx.sc_matrix = self.inputs.sc_matrix[0]
+            self.ctx.sc_matrix = self.inputs.sc_matrix
                     
         return not hasattr(self.inputs,"sc_matrix")
         
