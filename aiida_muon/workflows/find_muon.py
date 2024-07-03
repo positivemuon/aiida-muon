@@ -405,7 +405,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 pseudo_family = pseudo_family,
                 protocol=protocol,
                 overrides=overrides,
-                kpoints_distance=kpoints_distance,
                 relax_type=RelaxType.POSITIONS,
                 **kwargs,
                 )
