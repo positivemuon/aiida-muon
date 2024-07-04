@@ -313,6 +313,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         protocol: str =None,
         overrides: dict = {},
         relax_unitcell: bool =False,
+        conv_thr: float = 0.0257,
         magmom: list = None,
         options=None,
         sc_matrix: list =None,
@@ -382,6 +383,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 relax_unitcell = relax_unitcell,
                 charge_supercell=charge_supercell, # <== by default it is false.
                 kpoints_distance=kpoints_distance,
+                conv_thr = conv_thr,
                 overrides=overrides.pop("impuritysupercellconv",None),
                 )
         
