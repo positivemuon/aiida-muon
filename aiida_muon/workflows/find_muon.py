@@ -381,7 +381,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 pseudo_family = pseudo_family,
                 relax_unitcell = relax_unitcell,
                 charge_supercell=charge_supercell, # <== by default it is false.
-                kpoints_distance = kpoints_distance,
                 overrides=overrides.pop("impuritysupercellconv",None),
                 )
         
