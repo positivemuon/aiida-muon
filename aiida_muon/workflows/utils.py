@@ -161,7 +161,7 @@ def check_get_hubbard_u_parms(p_st, new_structuredata=False):
         d_spc = list(set(spc))
 
     # 1 element compounds are not given any U values, 2 for the muon specie
-    if len(d_spc) > 2: # TODO: is this correct? Is it really needed?
+    if (len(d_spc) > 2) or ("H" not in d_spc and len(d_spc)>1): # TODO: is this correct? Is it really needed?
         hub_u = {}
         for spk in d_spc:
             # remove numbers from species name

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import numpy as np
+import copy
 from aiida import orm
 from aiida.engine import WorkChain, calcfunction, if_
 from aiida.plugins import CalculationFactory, DataFactory, WorkflowFactory
@@ -27,8 +28,6 @@ from .utils import (
     get_struct_wt_distortions,
     load_workchain_data,
 )
-
-from copy import copy
 
 StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
@@ -369,9 +368,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 #print("done. Inspect structure.hubbard")  
+        else: # orm.StructureData
+            if hubbard_params is not None:
+                structure = HubbardStructureData.from_structure(structure)
+                for kind, U in hubbard_params.items():
+                    structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
         
          
-        
         #TODO: cleanup, too much pop, loops...
         
         #### Musconv
@@ -1321,7 +1324,19 @@ def get_override_dict(structure, pseudo_family, kpoints_distance, charge_superce
         
     else:
         start_mg_dict = None
-
+    
+    # Produce the overrides for IsolatedImpurityWorkChain: the same pw setup as for PwRelaxWorkChain, but for PwBaseWorkChain.
+    _overrides["impuritysupercellconv"] = {
+        "base" : copy.deepcopy(_overrides["base"]),
+        "pre_relax" : copy.deepcopy(_overrides), 
+    }
+    # switch off charge in the pre_relax:
+    _overrides["impuritysupercellconv"]["pre_relax"]["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 0
+        
+        
+    
+    
+    
     '''# HUBBARD
     # check and assign hubbard u
     inpt_st = structure.get_pymatgen_structure()
@@ -1348,7 +1363,7 @@ def iterdict(d,key):
 
 
 def recursive_consistency_check(input_dict,_):
-    import copy
+    
     
     """Validation of the inputs provided for the FindMuonWorkChain. It checks essentially the same of pw_overrides. If you go from protocols you are safe, except for Hubbard: 
     an exception is raise if it is needed, but you have to set it up in your StructureData. PROBLEM: how to deal with supercell generation...
