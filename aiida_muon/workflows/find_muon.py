@@ -381,6 +381,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 pseudo_family = pseudo_family,
                 relax_unitcell = relax_unitcell,
                 charge_supercell=charge_supercell, # <== by default it is false.
+                kpoints_distance = kpoints_distance,
                 overrides=overrides.pop("impuritysupercellconv",None),
                 )
         
@@ -651,10 +652,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 + self.inputs.structure.get_pymatgen_structure().formula
             },
         )
-        if self.inputs.charge_supercell:
+        if hasattr(self.inputs,"charge_supercell"):
         #
             overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"], {"SYSTEM": {"tot_charge": 1.0}}
+                overrides["base"]["pw"]["parameters"], {"SYSTEM": {"tot_charge": int(self.inputs.charge_supercell)}}
             )
         # if self.inputs.magmom is not None:
         #MB this should be automatically done in the new implementation with the MagneticStructureData.
