@@ -350,7 +350,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #check on the structure: if hubbard is needed, do it with append onsite... if the structure is already stored, clone it. 
         hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
         if isinstance(structure,StructureData):
-            if hubbard_params is not None:
+            if hubbard_params is not None and magmom is not None:
                 if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
                     if structure.is_stored:
                         #print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
@@ -365,12 +365,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         #print("done. Inspect structure.hubbard")  
         elif isinstance(structure,HubbardStructureData):
             #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
-            if hubbard_params is not None:
+            if hubbard_params is not None and magmom is not None:
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 #print("done. Inspect structure.hubbard")  
         else: # orm.StructureData
-            if hubbard_params is not None:
+            if hubbard_params is not None and magmom is not None:
                 structure = HubbardStructureData.from_structure(structure)
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
@@ -425,6 +425,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         builder.structure = structure
         builder.pseudo_family = orm.Str(pseudo_family)
+        builder_impuritysupercellconv.pseudo_family = orm.Str(pseudo_family)
         
         #setting subworkflows inputs
         #probably, it is better to populate defaults and then pop if not needed, as done later.
@@ -713,7 +714,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         coordinates="collinear")
                 if self.ctx.hubbardu_dict:
                     assign_hubbard_parameters(inputs.structure, self.ctx.hubbardu_dict)
-            elif self.ctx.hubbardu_dict and not isinstance(inputs.structure,HubbardStructureData):
+            elif self.ctx.hubbardu_dict and not isinstance(inputs.structure,HubbardStructureData) and "magmom" in self.inputs:
                 inputs.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=supercell_list[i_index]),self.ctx.hubbardu_dict)
                 
             
@@ -894,7 +895,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         coordinates="collinear")
                 if self.ctx.hubbardu_dict:
                     assign_hubbard_parameters(inputs.pw.structure, self.ctx.hubbardu_dict)
-            elif self.ctx.hubbardu_dict and not isinstance(inputs.pw.structure,HubbardStructureData):
+            elif self.ctx.hubbardu_dict and not isinstance(inputs.pw.structure,HubbardStructureData) and "magmom" in self.inputs:
                 inputs.pw.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=rlx_st),self.ctx.hubbardu_dict)
             
             #MB: this should be done once for all, put here just for convenience
