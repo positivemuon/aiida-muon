@@ -502,7 +502,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         inputs = AttributeDict(self.exposed_inputs(MusconvWorkChain, namespace='impuritysupercellconv'))
         inputs.structure = self.inputs.structure
         if not self.inputs.hubbard_u: 
-            inputs.structure = orm.StructureData(ase=self.inputs.structure) # so we lose the info on hubbard. this is the case where we use protocol but then we set builder.hubbard = False later.
+            inputs.structure = orm.StructureData(ase=self.inputs.structure.get_ase()) # so we lose the info on hubbard. this is the case where we use protocol but then we set builder.hubbard = False later.
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
         
