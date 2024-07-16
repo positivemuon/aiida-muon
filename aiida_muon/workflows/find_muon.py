@@ -473,8 +473,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             if i in overrides.keys():
                 builder[i] = overrides[i] 
         
-        
-        
         return builder
     
     
@@ -1299,6 +1297,7 @@ def get_override_dict(structure, pseudo_family, kpoints_distance, charge_superce
                     "electron_maxstep": 500,
                     "mixing_mode": "local-TF",
                     'conv_thr': 1.0e-6,
+                    'mixing_beta':0.3,
                 },
                 },
                     "metadata": {
