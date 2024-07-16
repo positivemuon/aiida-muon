@@ -350,7 +350,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #check on the structure: if hubbard is needed, do it with append onsite... if the structure is already stored, clone it. 
         hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
         if isinstance(structure,StructureData):
-            if hubbard_params is not None and magmom is not None:
+            if hubbard_params is not None and magmom is not None and hubbard:
                 if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
                     if structure.is_stored:
                         #print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
@@ -363,14 +363,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         for kind, U in hubbard_params.items():
                             structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                         #print("done. Inspect structure.hubbard")  
-        elif isinstance(structure,HubbardStructureData):
+        elif isinstance(structure,HubbardStructureData) and  hubbard:
             #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
             if hubbard_params is not None and magmom is not None:
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 #print("done. Inspect structure.hubbard")  
         else: # orm.StructureData
-            if hubbard_params is not None and magmom is not None:
+            if hubbard_params is not None and magmom is not None  and hubbard:
                 structure = HubbardStructureData.from_structure(structure)
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
@@ -501,7 +501,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         inputs = AttributeDict(self.exposed_inputs(MusconvWorkChain, namespace='impuritysupercellconv'))
         inputs.structure = self.inputs.structure
-
+        if not self.inputs.hubbard_u: 
+            inputs.structure = orm.StructureData(ase=self.inputs.structure) # so we lose the info on hubbard. this is the case where we use protocol but then we set builder.hubbard = False later.
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
         
@@ -610,7 +611,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.n_uuid_dict = {}
 
     def setup_pw_overrides(self):
-        """Get the required overrides i.e pw parameter setup. NOT INCLUDED IN THE OUTLINE"""
+        """Get the required overrides i.e pw parameter setup. STILL INCLUDED IN THE OUTLINE"""
         '''
         Miki Bonacci: I think that this overrides are no more needed once we have the MagneticStructureData.
         Also, if we do this in a protocol, we can also tune it before the run, just in case.
@@ -646,7 +647,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             {"ELECTRONS": {"electron_maxstep": 500}},
         )
         overrides["base"]["pw"]["parameters"] = recursive_merge(
-            overrides["base"]["pw"]["parameters"], {"ELECTRONS": {"mixing_mode": "local-TF"}}
+            overrides["base"]["pw"]["parameters"], {"ELECTRONS": {"mixing_mode": "local-TF", "mixing_beta":0.3}}
         )
         # overrides['base']['pw']['parameters'] = recursive_merge(overrides['base']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
         overrides["base"]["pw"]["metadata"] = recursive_merge(
