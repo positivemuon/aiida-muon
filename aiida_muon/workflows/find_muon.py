@@ -18,6 +18,8 @@ from aiida_impuritysupercellconv.workflows.impuritysupercellconv import input_va
 
 from aiida.orm import StructureData as LegacyStructureData
 from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
+from aiida_quantumespresso.common.hubbard import Hubbard
+
 
 from .niche import Niche
 from .utils import (
@@ -39,6 +41,8 @@ def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
     hubbard_structure = HubbardStructureData.from_structure(structure)
     for kind, U in hubbard_dict.items():
         hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+        
+    hubbard_structure.hubbard = Hubbard.from_list(hubbard_structure.hubbard.to_list(), projectors="atomic")
     return hubbard_structure
 
 def assign_hubbard_parameters(structure: StructureData, hubbard_dict):
@@ -363,17 +367,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         for kind, U in hubbard_params.items():
                             structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                         #print("done. Inspect structure.hubbard")  
-        elif isinstance(structure,HubbardStructureData) and  hubbard:
+        elif isinstance(structure,HubbardStructureData) and hubbard:
             #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
             if hubbard_params is not None and magmom is not None:
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 #print("done. Inspect structure.hubbard")  
+                structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         else: # orm.StructureData
-            if hubbard_params is not None and magmom is not None  and hubbard:
+            if hubbard_params is not None and magmom is not None and hubbard:
                 structure = HubbardStructureData.from_structure(structure)
                 for kind, U in hubbard_params.items():
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         
          
         #TODO: cleanup, too much pop, loops...
