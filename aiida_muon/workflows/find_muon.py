@@ -1031,7 +1031,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             b_field = compute_dipolar_field(
                 self.inputs.structure,
                 self.ctx.magmom,
-                self.inputs.sc_matrix[0],
+                self.ctx.sc_matrix,
                 rlx_struct,
                 orm.Float(cnt_field),
             )
