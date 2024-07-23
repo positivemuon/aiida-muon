@@ -530,7 +530,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             return self.exit_codes.ERROR_MUSCONV_CALC_FAILED
         else:
             self.report("Found supercell")
-            self.ctx.sc_matrix = self.ctx["IsolatedImpurityWorkChain"].outputs.Converged_SCmatrix.get_array('sc_mat')
+            sc_mat_array = self.ctx["IsolatedImpurityWorkChain"].outputs.Converged_SCmatrix.get_array('sc_mat')
+            self.ctx.sc_matrix = sc_mat_array.tolist()
 
                 
     def setup(self):
