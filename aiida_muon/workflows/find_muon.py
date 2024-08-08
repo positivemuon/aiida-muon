@@ -876,10 +876,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             inputs["clean_workdir"] = self.ctx.overrides.pop("clean_workdir",orm.Bool(False))
             inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
         
-        inputs.kpoints_distance = orm.Float(inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid required
+        #inputs.kpoints_distance = orm.Float(inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid 
         
         if not "kpoints_distance" in inputs:
-            inputs.kpoints_distance = orm.Float(self.inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid required
+            #inputs.kpoints_distance = orm.Float(self.inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid
+            inputs.kpoints_distance = self.inputs.kpoints_distance
         
         for j_index, clus in enumerate(unique_cluster_list):
             #
