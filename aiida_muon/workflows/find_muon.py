@@ -149,7 +149,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         )
 
         spec.input(
-            "hubbard_u",
+            "hubbard",
             valid_type=orm.Bool,
             default=lambda: orm.Bool(True),
             required=False,
@@ -467,7 +467,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.mu_spacing=orm.Float(mu_spacing)
         builder.charge_supercell=orm.Bool(charge_supercell)
         builder.kpoints_distance = orm.Float(kpoints_distance)
-        builder.hubbard_u = orm.Bool(hubbard)
+        builder.hubbard = orm.Bool(hubbard)
         builder.spin_pol_dft = orm.Bool(spin_pol_dft)
         
         # PpCalculation inputs: Only this, the rest is really default... 
@@ -507,7 +507,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         inputs = AttributeDict(self.exposed_inputs(MusconvWorkChain, namespace='impuritysupercellconv'))
         inputs.structure = self.inputs.structure
-        if not self.inputs.hubbard_u: 
+        if not self.inputs.hubbard: 
             inputs.structure = orm.StructureData(ase=self.inputs.structure.get_ase()) # so we lose the info on hubbard. this is the case where we use protocol but then we set builder.hubbard = False later.
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
@@ -547,7 +547,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             
         # check and get hubbard u
         # AAA compatibility only with qe>=7.1 and old StructureData; new Hubbard format.
-        if self.inputs.hubbard_u: # and not isinstance(self.ctx.structure,HubbardStructureData) and isinstance(self.ctx.structure,LegacyStructureData):
+        if self.inputs.hubbard: # and not isinstance(self.ctx.structure,HubbardStructureData) and isinstance(self.ctx.structure,LegacyStructureData):
             inpt_st = self.ctx.structure.get_pymatgen_structure()
             rst_u = check_get_hubbard_u_parms(inpt_st)
             self.ctx.hubbardu_dict = rst_u
