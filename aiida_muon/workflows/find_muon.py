@@ -648,6 +648,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         overrides["base"]["pw"]["parameters"] = recursive_merge(
             overrides["base"]["pw"]["parameters"], {"CONTROL": {"nstep": 200}}
         )
+        #overrides["base"]["pw"]["parameters"] = recursive_merge(overrides["base"]["pw"]["parameters"], {"CONTROL": {"etot_conv_thr": 1.0e-4}})
+        #overrides["base"]["pw"]["parameters"] = recursive_merge(overrides["base"]["pw"]["parameters"], {"CONTROL": {"forc_conv_thr": 1.0e-3}})   #less costlier instead of 1e-4 default
         # overrides['base']['pw']['parameters'] = recursive_merge(overrides['base']['pw']['parameters'], {'SYSTEM':{'smearing': 'gaussian'}})
         overrides["base"]["pw"]["parameters"] = recursive_merge(
             overrides["base"]["pw"]["parameters"],
@@ -1298,6 +1300,8 @@ def get_override_dict(structure, pseudo_family, kpoints_distance, charge_superce
                 "pw": {
                     "parameters": {
                 "CONTROL": {
+                    #"etot_conv_thr" =   1.0e-4, 
+                    #"forc_conv_thr" =   1.0e-3,   this default is preferred for relax, it is 1e-4 for PWbaseworkchain
                     "nstep": 200
                     },
                 "SYSTEM":{
