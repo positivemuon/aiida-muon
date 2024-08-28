@@ -34,3 +34,11 @@ cd examples/
 python run_example_si_fe_mno.py
 ```
 * (caveat: labels of codes to be edited)
+
+## Acknowledgements
+We acknowledge support from:
+* the [NCCR MARVEL](http://nccr-marvel.ch/) funded by the Swiss National Science Foundation;
+* the PNRR MUR project [ECS-00000033-ECOSISTER](https://ecosister.it/);
+
+<img src="https://raw.githubusercontent.com/mikibonacci/aiida-muon/main/docs/source/images/MARVEL_logo.png" width="250px" height="131px"/>
+<img src="https://raw.githubusercontent.com/mikibonacci/aiida-muon/main/docs/source/images/ecosister_logo.png" width="300px" height="84px"/>
