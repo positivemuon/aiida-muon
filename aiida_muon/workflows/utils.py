@@ -10,7 +10,6 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry import analyzer
 from pymatgen.util.coord import pbc_shortest_vectors
 
-
 def get_collinear_mag_kindname(p_st, magm, half=True):
     """
     Using pymatgen structure and magmom properties, provides the kind name for
