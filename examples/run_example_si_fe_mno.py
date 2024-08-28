@@ -24,11 +24,7 @@ from aiida_muon.workflows.utils import read_wrkc_output
 # scmat_node = orm.ArrayData()
 # scmat_node.set_array('sc_matrix',np.array(scmat))
 # scmat_node=orm.List([ [[2,0,0],[0,2,0],[0,0,2]], ])
-scmat_node = orm.List(
-    [
-        [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-    ]
-)
+scmat_node = orm.List([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
 
 # EDIT PW AND PP CODE TO SUIT YOURS
@@ -60,6 +56,7 @@ if system == "Si":
     aiida_structure  = orm.StructureData(pymatgen = smag1)
     mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
     ppcode = None
+    magmom = None
 elif system == "Fe":
     kpoints_distance = orm.Float(0.601)
     charge_supercell = orm.Bool(False)
@@ -83,8 +80,8 @@ elif system == "MnO":
 
 ## However, this works only with old version of QE... so the best example is the one in the jupyter notebook,
 ## which uses the protocols which set automatically the U.
-builder.qe.hubbard_u = orm.Bool(True)
-
+builder.hubbard = orm.Bool(True)
+builder.charge_supercell = orm.Bool(charge_supercell)
 builder.structure = aiida_structure
 builder.mu_spacing = mu_spacing
 builder.kpoints_distance = kpoints_distance
@@ -93,7 +90,8 @@ builder.pp_code = ppcode
 if system in ["Fe","MnO"] and structuredata == "new":
     aiida_structure.magnetization.set_from_components(magnetic_moment_per_site = magmom)
 else:
-    builder.qe.magmom = magmom
+    if magmom:
+        builder.magmom = magmom
 
 pw_metadata = {
     "description": "Muons site calculations for " + smag1.formula,
