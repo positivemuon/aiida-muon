@@ -50,6 +50,9 @@ class Niche:
             eq_pos[i] = op.operate_multi(frac_coords) % 1
 
         # Compute equivalence list
+        '''
+        Miki Bonacci: maybe optimization with np.masked arrays. 
+        '''
         for i in range(len(frac_coords)):
             if eq_list[i] >= 0:
                 continue
@@ -85,6 +88,18 @@ class Niche:
         all_differences = pbc_shortest_vectors(
             host_lattice.lattice, grid_coords, host_lattice.frac_coords
         )
+
+        '''
+        Miki Bonacci: masked python array? In this way, where the mask is True, position
+        should be discarded.
+
+        import numpy.ma as ma
+        masked = ma.masked_less(
+            np.linalg.norm(all_differences, axis=1), min_distance
+            )
+
+        return masked.mask
+        '''
 
         mask = np.ones(len(grid_coords), dtype=bool)
         for i, p in enumerate(all_differences):
@@ -256,6 +271,10 @@ class Niche:
 
         # find equivalent positions among grid points
         good = self.find_equivalent_positions(pos, st, atol=1e-3)
+        '''
+        Miki Bonacci: the good==np... correspondence may be optimized 
+        with np.masked arrays 
+        '''
         pos = pos[good == np.arange(len(pos))]
 
         # Add positions to original structure

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import numpy as np
 from aiida import load_profile, orm
+from aiida.plugins import DataFactory
 from aiida.engine import run, submit
 from pymatgen.core import Structure
 from pymatgen.io.cif import CifParser
@@ -23,83 +24,97 @@ from aiida_muon.workflows.utils import read_wrkc_output
 # scmat_node = orm.ArrayData()
 # scmat_node.set_array('sc_matrix',np.array(scmat))
 # scmat_node=orm.List([ [[2,0,0],[0,2,0],[0,0,2]], ])
-scmat_node = orm.List(
-    [
-        [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-    ]
-)
+scmat_node = orm.List([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
 
 
 # EDIT PW AND PP CODE TO SUIT YOURS
-codename = "pw7_0@localhost_serial1"  # edit to user
+codename = "pw-7.2@localhost" # edit
 code = orm.Code.get_from_string(codename)
 
-pcodename = "pp7_0@localhost_serial1"  # edit to user
-pcode = orm.Code.get_from_string(pcodename)
+from aiida.orm import StructureData as LegacyStructureData
 
+#choose the StructureData to be used in the simulation.
+structuredata="old"
+if structuredata=="new":    
+    StructureData = DataFactory("atomistic.structure")
+else:
+    StructureData = LegacyStructureData
 
 builder = FindMuonWorkChain.get_builder()
+
 builder.sc_matrix = scmat_node
-builder.qe.pw_code = code
-builder.qe.pp_code = pcode
-builder.qe.pseudofamily = orm.Str("SSSP/1.2/PBE/efficiency")
-builder.qe.k_dist = orm.Float(0.601)
-builder.qe.charged_supercell = orm.Bool(False)
-builder.qe.hubbard_u = orm.Bool(True)
+builder.relax.base.pw.code = code
+builder.pseudo_family = orm.Str("SSSP/1.3/PBE/efficiency")
 
-# uncomment below for Si
-"""
-parser          = CifParser("data/Si.cif")
-smag1        = parser.get_structures(primitive = True)[0]
-aiida_structure2 = orm.StructureData(pymatgen = smag1)
-builder.structure = aiida_structure2
-builder.mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
-"""
+system = "Si" #Si, Fe, MnO
 
+if system == "Si":
+    kpoints_distance = orm.Float(0.601)
+    charge_supercell = orm.Bool(False)
+    parser           = CifParser("data/Si.cif")
+    smag1            = parser.get_structures(primitive = True)[0]
+    aiida_structure  = orm.StructureData(pymatgen = smag1)
+    mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
+    ppcode = None
+    magmom = None
+elif system == "Fe":
+    kpoints_distance = orm.Float(0.601)
+    charge_supercell = orm.Bool(False)
+    parser           = CifParser("data/Fe_bcc.mcif")
+    smag1            = parser.get_structures(primitive = True)[0]
+    aiida_structure  = orm.StructureData(pymatgen = smag1)
+    mu_spacing = orm.Float(0.75) #for Fe  no primitive 4 mu sites
+    magmoms = smag1.site_properties["magmom"]
+    magmom = orm.List([list(magmom) for magmom in magmoms])        
+    ppcode = orm.load_code("pw-7.2@localhost")
+elif system == "MnO":
+    kpoints_distance = orm.Float(0.601)
+    charge_supercell = orm.Bool(False)
+    parser           = CifParser("data/MnO.mcif")
+    smag1            = parser.get_structures(primitive = True)[0]
+    aiida_structure  = orm.StructureData(pymatgen = smag1)
+    mu_spacing = orm.Float(1.6)  # for mno primitive 2 mu sites,  4 mno atoms
+    magmoms = smag1.site_properties["magmom"]
+    magmom = orm.List([list(magmom) for magmom in magmoms])         
+    ppcode = orm.load_code("pw-7.2@localhost")
 
-# uncomment below for Fe
-"""
-smag1 = Structure.from_file("data/Fe_bcc.mcif", primitive=False)
-aiida_structure = orm.StructureData(pymatgen=smag1)
-smag = aiida_structure.get_pymatgen_structure()
-magmoms = smag1.site_properties["magmom"]
-magmom = orm.List([list(magmom) for magmom in magmoms])
+## However, this works only with old version of QE... so the best example is the one in the jupyter notebook,
+## which uses the protocols which set automatically the U.
+builder.hubbard = orm.Bool(True)
+builder.charge_supercell = orm.Bool(charge_supercell)
 builder.structure = aiida_structure
-builder.qe.magmom = magmom
-builder.mu_spacing = orm.Float(0.75)  # for Fe  no primitive 4 mu sites
-##builder.mu_spacing = orm.Float(0.6) #for Fe primitive 4 mu sites
-"""
+builder.mu_spacing = mu_spacing
+builder.kpoints_distance = kpoints_distance
+builder.pp_code = ppcode
 
-# uncomment below for MnO
-# """
-smag1 = Structure.from_file("data/MnO.mcif", primitive=True)
-aiida_structure = orm.StructureData(pymatgen=smag1)
-smag = aiida_structure.get_pymatgen_structure()
-magmoms = smag1.site_properties["magmom"]
-magmom = orm.List([list(magmom) for magmom in magmoms])
-builder.structure = aiida_structure
-builder.qe.magmom = magmom
-builder.mu_spacing = orm.Float(1.6)  # for mno primitive 2 mu sites,  4 mno atoms
-# """
-
+if system in ["Fe","MnO"] and structuredata == "new":
+    aiida_structure.magnetization.set_from_components(magnetic_moment_per_site = magmom)
+else:
+    if magmom:
+        builder.magmom = magmom
 
 pw_metadata = {
-    "description": "Muonss site calculations for " + smag1.formula,
+    "description": "Muons site calculations for " + smag1.formula,
     #'dry_run' : True,
     "options": {"max_wallclock_seconds": 50000, "resources": {"num_machines": 1}},
-    "label": "Si Fe MnO  relax test",
+    "label": f"{system} relax test",
 }
-
 
 pw_settings = {"ONLY_INITIALIZATION": True}
 
-
 # TO DO.put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard
 parameters_dict = {
-    "CONTROL": {"max_seconds": 45000, "forc_conv_thr": 0.1, "etot_conv_thr": 0.1},
+    "CONTROL": {
+        "calculation":"relax",
+        "max_seconds": 45000, 
+        "forc_conv_thr": 0.1, 
+        "etot_conv_thr": 0.1},
     "SYSTEM": {
         "ecutwfc": 30.0,
         "ecutrho": 240.0,
+        "occupations": "smearing",
+        "smearing":"gaussian",
+        "degauss": 0.01,
     },
     "ELECTRONS": {
         "electron_maxstep": 100,
@@ -108,8 +123,8 @@ parameters_dict = {
 }
 
 
-builder.qe.parameters = orm.Dict(dict=parameters_dict)
-builder.qe.metadata = orm.Dict(dict=pw_metadata)
+builder.relax.base.pw.parameters = orm.Dict(parameters_dict)
+builder.relax.base.pw.metadata = pw_metadata
 # builder.qe.settings =orm.Dict(dict=pw_settings)
 
 node = run(builder)

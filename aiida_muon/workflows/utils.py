@@ -10,8 +10,7 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry import analyzer
 from pymatgen.util.coord import pbc_shortest_vectors
 
-
-def get_collinear_mag_kindname(p_st, magm):
+def get_collinear_mag_kindname(p_st, magm, half=True):
     """
     Using pymatgen structure and magmom properties, provides the kind name for
     magnetically distinct species for spin polarized calculations with aiida-QuantumESPRESSO.
@@ -23,6 +22,8 @@ def get_collinear_mag_kindname(p_st, magm):
 
         magm: list
             corresponding magmom properties of the pymatgen structure instance.
+        half: bool
+            if True, only sets magnetic moments to 0,+-0.5.
 
     Raises
     ------
@@ -93,8 +94,10 @@ def get_collinear_mag_kindname(p_st, magm):
     for k in mgek.keys():
         for idx in mgek[k].keys():
             spin = mgek[k][idx]
-            mgek[k][idx] = round(spin * (0.5 / abs(spin)), 1)
-
+            if half:
+                mgek[k][idx] = round(spin * (0.5 / abs(spin)), 1)
+            else:
+                mgek[k][idx] = round(spin, 1)
     start_mag_dict = {}
     for val in mgek.values():
         start_mag_dict.update(val)
@@ -103,7 +106,7 @@ def get_collinear_mag_kindname(p_st, magm):
     return p_st.copy(site_properties={"kind_name": kind_values}), start_mag_dict
 
 
-def check_get_hubbard_u_parms(p_st):
+def check_get_hubbard_u_parms(p_st, new_structuredata=False):
     """Set Hubbard U parameters for each kind of specie
 
     Parameters
@@ -492,7 +495,7 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
     # get the symmetry operations that can transform mupos_rlx to n_mupos
     symm_op = []
     for i, op in enumerate(ops):
-        newp = op.operate(mupos_rlx)
+        newp = op.operate(mupos_rlx) % 1
         if np.all(np.abs(newp - n_mupos) < tol):
             symm_op.append(i)
 
