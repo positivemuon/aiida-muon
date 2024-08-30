@@ -38,3 +38,6 @@ python run_example_si_fe_mno.py
 **We acknowledge support from**:
 * the [NCCR MARVEL](http://nccr-marvel.ch/) funded by the Swiss National Science Foundation;
 * the PNRR MUR project [ECS-00000033-ECOSISTER](https://ecosister.it/);
+
+<img src="source/images/MARVEL_logo.png" alt="fishy" width="200px" class="bg-primary">
+<img src="source/images/ECS-00000033-ECOSISTER.png" alt="fish width="200px" class="bg-primary">
