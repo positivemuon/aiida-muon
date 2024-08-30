@@ -685,7 +685,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     }
                 },
             )
-
         self.ctx.overrides = overrides
 
     def compute_supercell_structures(self):
@@ -695,13 +694,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         supercell_list = self.ctx.supc_list
         
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        inputs_pw = inputs["base"]["pw"]["parameters"].get_dict()
 
         if "overrides" in self.ctx:            
             """ 
             This does not work: inputs = recursive_merge(inputs["base"], self.ctx.overrides["base"])
             so I'm gonna do this:
             """
-            inputs = recursive_merge(self.ctx.overrides,inputs)
+            inputs_pw_new = recursive_merge(self.ctx.overrides["base"]["pw"]["parameters"],inputs_pw)
+            inputs["base"]["pw"]["parameters"] = orm.Dict(dict=inputs_pw_new)
             inputs["clean_workdir"] = self.ctx.overrides.pop("clean_workdir",orm.Bool(True))
             inputs = prepare_process_inputs(PwRelaxWorkChain, inputs)
             
@@ -866,18 +867,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         unique_cluster_list = self.ctx.unique_cluster
         
         inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace='pwscf'))
-        
-        if "overrides" in self.ctx:
-            
+        inputs_pw = inputs["pw"]["parameters"].get_dict()
+
+        if "overrides" in self.ctx:            
             """ 
             This does not work: inputs = recursive_merge(inputs["base"], self.ctx.overrides["base"])
             so I'm gonna do this:
             """
-            
-            inputs = recursive_merge(self.ctx.overrides["base"],inputs)
-            inputs["clean_workdir"] = self.ctx.overrides.pop("clean_workdir",orm.Bool(False))
+            inputs_pw_new = recursive_merge(self.ctx.overrides["base"]["pw"]["parameters"],inputs_pw)
+            inputs["pw"]["parameters"] = orm.Dict(dict=inputs_pw_new)
             inputs = prepare_process_inputs(PwBaseWorkChain, inputs)
         
+        inputs["clean_workdir"] = orm.Bool(False) # we need for the PpCalculation.
+
         #inputs.kpoints_distance = orm.Float(inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid 
         
         if not "kpoints_distance" in inputs:
