@@ -46,7 +46,7 @@ builder.sc_matrix = scmat_node
 builder.relax.base.pw.code = code
 builder.pseudo_family = orm.Str("SSSP/1.3/PBE/efficiency")
 
-system = "Si" #Si, Fe, MnO
+system = "Fe" #Si, Fe, MnO
 
 if system == "Si":
     kpoints_distance = orm.Float(0.601)
@@ -66,7 +66,7 @@ elif system == "Fe":
     mu_spacing = orm.Float(0.75) #for Fe  no primitive 4 mu sites
     magmoms = smag1.site_properties["magmom"]
     magmom = orm.List([list(magmom) for magmom in magmoms])        
-    ppcode = orm.load_code("pw-7.2@localhost")
+    ppcode = orm.load_code("pp-7.2@localhost")
 elif system == "MnO":
     kpoints_distance = orm.Float(0.601)
     charge_supercell = orm.Bool(False)
@@ -76,7 +76,7 @@ elif system == "MnO":
     mu_spacing = orm.Float(1.6)  # for mno primitive 2 mu sites,  4 mno atoms
     magmoms = smag1.site_properties["magmom"]
     magmom = orm.List([list(magmom) for magmom in magmoms])         
-    ppcode = orm.load_code("pw-7.2@localhost")
+    ppcode = orm.load_code("pp-7.2@localhost")
 
 ## However, this works only with old version of QE... so the best example is the one in the jupyter notebook,
 ## which uses the protocols which set automatically the U.
@@ -96,8 +96,8 @@ else:
 pw_metadata = {
     "description": "Muons site calculations for " + smag1.formula,
     #'dry_run' : True,
-    "options": {"max_wallclock_seconds": 50000, "resources": {"num_machines": 1}},
-    "label": f"{system} relax test",
+    "options": {"max_wallclock_seconds": 50001, "resources": {"num_machines": 1,"num_mpiprocs_per_machine":1}},
+    "label": f"{system} muon relax test",
 }
 
 pw_settings = {"ONLY_INITIALIZATION": True}
@@ -106,11 +106,11 @@ pw_settings = {"ONLY_INITIALIZATION": True}
 parameters_dict = {
     "CONTROL": {
         "calculation":"relax",
-        "max_seconds": 45000, 
+        "max_seconds": 45002, 
         "forc_conv_thr": 0.1, 
         "etot_conv_thr": 0.1},
     "SYSTEM": {
-        "ecutwfc": 30.0,
+        "ecutwfc": 35.0,
         "ecutrho": 240.0,
         "occupations": "smearing",
         "smearing":"gaussian",
@@ -122,10 +122,16 @@ parameters_dict = {
     },
 }
 
+if magmom: 
+    parameters_dict["SYSTEM"]["nspin"] = 2
 
 builder.relax.base.pw.parameters = orm.Dict(parameters_dict)
 builder.relax.base.pw.metadata = pw_metadata
 # builder.qe.settings =orm.Dict(dict=pw_settings)
+
+if magmom:
+    builder.pwscf = builder.relax.base
+    builder.pp_metadata = pw_metadata # should change this.
 
 node = run(builder)
 print(node)
