@@ -37,11 +37,35 @@ PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 MusconvWorkChain = WorkflowFactory('impuritysupercellconv')
 
 @calcfunction
-def create_hubbard_structure(structure: LegacyStructureData,hubbard_dict: dict):
-    hubbard_structure = HubbardStructureData.from_structure(structure)
-    for kind, U in hubbard_dict.items():
-        hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-        
+def create_hubbard_structure(structure: [HubbardStructureData, LegacyStructureData],hubbard_dict: [dict, HubbardStructureData]):
+    """
+    Create a Hubbard structure from a given structure and Hubbard parameters.
+
+    Parameters:
+    structure (HubbardStructureData or LegacyStructureData): The input structure data.
+    hubbard_dict (dict or HubbardStructureData): Dictionary containing Hubbard U parameters or a HubbardStructureData object.
+
+    Returns:
+    HubbardStructureData: The resulting Hubbard structure with initialized on-site Hubbard parameters.
+
+    Raises:
+    TypeError: If the input types are not as expected.
+    
+    The logic is naive, to be optimized.
+    """
+    
+    if isinstance(structure, HubbardStructureData) and isinstance(hubbard_dict, HubbardStructureData): 
+        hubbard_structure = HubbardStructureData.from_structure(LegacyStructureData(pymatgen=structure.get_pymatgen()))
+        for p in hubbard_dict.hubbard.parameters:
+            kind = hubbard_dict.sites[p.atom_index].kind_name
+            manifold = p.atom_manifold
+            value = p.value
+            hubbard_structure.initialize_onsites_hubbard(kind, manifold, value, 'U', use_kinds=True)
+    elif isinstance(structure, LegacyStructureData): 
+        hubbard_structure = HubbardStructureData.from_structure(structure)
+        for kind, U in hubbard_dict.items():
+            hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+
     hubbard_structure.hubbard = Hubbard.from_list(hubbard_structure.hubbard.to_list(), projectors="atomic")
     return hubbard_structure
 
@@ -367,13 +391,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                         for kind, U in hubbard_params.items():
                             structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                         #print("done. Inspect structure.hubbard")  
-        elif isinstance(structure,HubbardStructureData) and hubbard:
-            #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
-            if hubbard_params is not None and magmom is not None:
-                for kind, U in hubbard_params.items():
-                    structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+        elif isinstance(structure,HubbardStructureData): # we do not do anything, we let the user define the Hubbard U 
+            pass #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
+            #if hubbard_params is not None and magmom is not None:
+            #    for kind, U in hubbard_params.items():
+            #        structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 #print("done. Inspect structure.hubbard")  
-                structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
+            #    structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         else: # orm.StructureData
             if hubbard_params is not None and magmom is not None and hubbard:
                 structure = HubbardStructureData.from_structure(structure)
@@ -487,10 +511,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         Temporary pre-process to understand if 
         we use StructureData or LegacyStructureData
         """
-        if isinstance(self.inputs.structure,StructureData):
+        if isinstance(self.inputs.structure, HubbardStructureData):
+            self.ctx.structure_type = HubbardStructureData
+        elif isinstance(self.inputs.structure,StructureData):
             self.ctx.structure_type = StructureData
         else:
             self.ctx.structure_type = LegacyStructureData
+        
             
         self.ctx.hubbardu_dict = None #needed to be defined.
 
@@ -571,7 +598,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
     def old_structuredata(self):
         #does not check for Hubbard inputs, but anyway will change.
-        return isinstance(self.ctx.structure, LegacyStructureData)
+        return isinstance(self.ctx.structure, LegacyStructureData) and not isinstance(self.ctx.structure, HubbardStructureData)
     
     def setup_magnetic_hubbardu_dict(self):
         """
@@ -711,8 +738,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         for i_index in range(len(supercell_list)):
             
-            inputs.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
-            if isinstance(inputs.structure,StructureData):
+            if self.ctx.structure_type == HubbardStructureData:
+                inputs.structure = LegacyStructureData(pymatgen=supercell_list[i_index])
+                inputs.structure = HubbardStructureData.from_structure(inputs.structure)
+            else:
+                inputs.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
+            
+            if isinstance(self.inputs.structure, HubbardStructureData):
+                inputs.structure = create_hubbard_structure(inputs.structure,self.inputs.structure)
+            elif isinstance(inputs.structure,StructureData):
                 """
                 The order of magnetization setting and hubbard does matter. The reason is that
                 hubbard qe cards are defined in terms of the atom site index.  
@@ -724,7 +758,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 if self.ctx.hubbardu_dict:
                     assign_hubbard_parameters(inputs.structure, self.ctx.hubbardu_dict)
             elif self.ctx.hubbardu_dict and not isinstance(inputs.structure,HubbardStructureData) and "magmom" in self.inputs:
-                inputs.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=supercell_list[i_index]),self.ctx.hubbardu_dict)
+                inputs.structure = create_hubbard_structure(inputs.structure,self.ctx.hubbardu_dict)
                 
             
             #MB: this should be done once for all, put here just for convenience
@@ -900,8 +934,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             rlx_st.translate_sites(
                 range(rlx_st.num_sites), -musite, frac_coords=True, to_unit_cell=False
             )
+            if self.ctx.structure_type == HubbardStructureData:
+                inputs.pw.structure = LegacyStructureData(pymatgen=supercell_list[i_index])
+                inputs.pw.structure = HubbardStructureData.from_structure(inputs.structure)
+            else:
+                inputs.pw.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
+                
             inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
-            if isinstance(inputs.pw.structure,StructureData):
+            if isinstance(inputs.pw.structure,HubbardStructureData):
+                inputs.pw.structure = create_hubbard_structure(inputs.pw.structure,self.inputs.structure)
+            elif isinstance(inputs.pw.structure,StructureData):
                 if "magnetization" in self.ctx.structure.get_defined_properties() and self.inputs.spin_pol_dft.value:
                     inputs.pw.structure.magnetization.set_from_components(
                         magnetic_moment_per_kind=self.ctx.structure.magnetization.collinear_kind_moments,
@@ -909,7 +951,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 if self.ctx.hubbardu_dict:
                     assign_hubbard_parameters(inputs.pw.structure, self.ctx.hubbardu_dict)
             elif self.ctx.hubbardu_dict and not isinstance(inputs.pw.structure,HubbardStructureData) and "magmom" in self.inputs:
-                inputs.pw.structure = create_hubbard_structure(self.ctx.structure_type(pymatgen=rlx_st),self.ctx.hubbardu_dict)
+                inputs.pw.structure = create_hubbard_structure(inputs.pw.structure,self.ctx.hubbardu_dict)
             
             #MB: this should be done once for all, put here just for convenience
             inputs.pw.pseudos = get_pseudos(
@@ -1030,7 +1072,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #
             # rlx_st = clus['rlxd_struct']
             rlx_st = Structure.from_dict(clus["rlxd_struct"])
-            rlx_struct = self.ctx.structure_type(pymatgen=rlx_st)
+            if isinstance(self.ctx.structure, HubbardStructureData):
+                rlx_struct = LegacyStructureData(pymatgen=supercell_list[i_index])
+                rlx_struct = HubbardStructureData.from_structure(inputs.structure)
+            else:
+                rlx_struct = self.ctx.structure_type(pymatgen=rlx_st)
             if not self.inputs.spin_pol_dft:
                 cnt_field = 0
             else:
