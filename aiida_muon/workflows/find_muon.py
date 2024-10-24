@@ -935,12 +935,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 range(rlx_st.num_sites), -musite, frac_coords=True, to_unit_cell=False
             )
             if self.ctx.structure_type == HubbardStructureData:
-                inputs.pw.structure = LegacyStructureData(pymatgen=supercell_list[i_index])
-                inputs.pw.structure = HubbardStructureData.from_structure(inputs.structure)
+                inputs.pw.structure = LegacyStructureData(pymatgen=rlx_st)
+                inputs.pw.structure = HubbardStructureData.from_structure(inputs.pw.structure)
             else:
-                inputs.pw.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
+                inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
                 
-            inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
+            #inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
             if isinstance(inputs.pw.structure,HubbardStructureData):
                 inputs.pw.structure = create_hubbard_structure(inputs.pw.structure,self.inputs.structure)
             elif isinstance(inputs.pw.structure,StructureData):
@@ -1072,9 +1072,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #
             # rlx_st = clus['rlxd_struct']
             rlx_st = Structure.from_dict(clus["rlxd_struct"])
-            if isinstance(self.ctx.structure, HubbardStructureData):
-                rlx_struct = LegacyStructureData(pymatgen=supercell_list[i_index])
-                rlx_struct = HubbardStructureData.from_structure(inputs.structure)
+            if self.ctx.structure_type == HubbardStructureData:
+                rlx_struct = LegacyStructureData(pymatgen=rlx_st)
+                rlx_struct = HubbardStructureData.from_structure(rlx_struct)
             else:
                 rlx_struct = self.ctx.structure_type(pymatgen=rlx_st)
             if not self.inputs.spin_pol_dft:
