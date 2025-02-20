@@ -86,4 +86,28 @@ def gensup(
     if only_one_cell:
         supc_list = supc_list[-1:]
     return supc_list
+
+def generate_supercell_with_impurities(
+    structure: Structure, # pymatgen
+    sc_matrix = [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+    mu_spacing = 1,
+    mu_list = None,
+):
+    """ Generates one supercell - undistorted - with all the predicted impurities
+    """
+
+
+    # 2 get the muon list
+    if not mu_list:
+        mu_list = niche_add_impurities(
+            structure,
+            niche_atom = "H",
+            niche_spacing = mu_spacing,
+            niche_distance = 1, # distance from hosting atoms,
+        )
+
+    # 3 produce the supercells
+    supc_list = gensup(structure, mu_list, sc_matrix, only_one_cell=True)
     
+    return supc_list[0]
+        
