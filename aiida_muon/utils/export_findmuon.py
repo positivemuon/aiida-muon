@@ -73,15 +73,32 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
         tot_energy = np.round(relaxwc.outputs.output_parameters.get_dict()["energy"]*10**3,1)
         structure_pk = relaxwc.outputs.output_structure.pk
         
+        # info for all the structures.
         all_structures[idx] = {}
         all_structures[idx]["structure_id_pk"] = structure_pk
         all_structures[idx]["label"] = idx
         all_structures[idx]["tot_energy"] = tot_energy
+        all_structures[idx]["muon_position_cc"] = list(
+                np.round(
+                    np.array(
+                        findmuon_output_node.unique_sites.get_dict()[idx][0]["sites"][
+                            -1
+                        ]["abc"]
+                    ),
+                    3,
+                ),
+            )
+        all_structures[idx]["muon_index"] = idx
+        all_structures[idx]["muon_index_global_unitcell"] = \
+            len(findmuon_output_node.all_index_uuid.creator.caller.inputs.structure.sites) + i
+        
+        # distortions.
         distortions[idx] = get_distortions(
             relaxwc.inputs.structure.get_ase(),
             relaxwc.outputs.output_structure.get_ase(),
         )
         
+        # info for the unique sites.
         if idx in findmuon_output_node.unique_sites.get_dict().keys():
             bars["muons"][idx] = {}
             bars["muons"][idx]["structure_id_pk"] = structure_pk
@@ -152,17 +169,35 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
     
     # redefine the "label" to be letters from A to Z
     df.loc["label"] = [chr(65 + i) for i in range(len(df.columns))]
-        
-    # then swap row and columns (for sure can be done already above)
-    df = df.transpose()
+    
     
     # exporting the dataframe for all sites; we do the same as above...
     df_all = pd.DataFrame.from_dict(all_structures)
     df_all.columns = df_all.columns.astype(int)
     df_all = df_all.sort_values("tot_energy", axis=1)
     df_all.loc["delta_E"] = (df_all.loc["tot_energy"] - df_all.loc["tot_energy"].min()).astype(int)
-    df_all = df_all.reindex(["structure_id_pk", "label", "delta_E", "tot_energy"])
-    df_all.loc["label"] = [chr(65 + i) for i in range(len(df_all))]
+    df_all = df_all.reindex(
+        [
+            "structure_id_pk", 
+            "label", 
+            "delta_E", 
+            "tot_energy", 
+            "muon_position_cc",
+            "muon_index_global_unitcell",
+            "muon_index"]
+    )
+    
+    # I need to order the labels in such a way that are the same as in df, and add new letters for the clustering-wise-excluded sites.
+    labels = []
+    for i in range(len(df_all.columns)):
+        if df_all.loc["structure_id_pk"].values[i] in df.loc["structure_id_pk"].values:
+            labels.append(df.loc["label"].values[df.loc["structure_id_pk"].values == df_all.loc["structure_id_pk"].values[i]][0])
+        else:
+            labels.append(chr(65 + i + len(df_all.columns)))
+    df_all.loc["label"] = labels
+    
+    # then swap row and columns (for sure can be done already above for df, but useful to keep the same order before this point)
+    df = df.transpose()
     df_all = df_all.transpose()
     
     return df, df_all, distortions
