@@ -332,27 +332,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #check on the structure: if hubbard is needed, do it with append onsite... if the structure is already stored, clone it. 
         # NOTE: `check_get_hubbard_u_parms` will only return the dictionary if we have more than 2 species in the structure (muon excluded).
         hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen(), u_dict=hubbard_dict)
-        if isinstance(structure,StructureData):
-            if hubbard_params is not None and magmom is not None and hubbard:
-                if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
-                    if structure.is_stored:
-                        #print("The structure you provided as input is stored but requires hubbard parameters: cloning it and defining hubbard according to this: \n{hubbard_params}.")
-                        structure = structure.clone()
-                        for kind, U in hubbard_params.items():
-                            structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                        #print("done. Inspect structure.hubbard")
-                    else:
-                        #print(f"The structure you provided as input requires hubbard parameters: defining hubbard according to this: \n{hubbard_params}.")
-                        for kind, U in hubbard_params.items():
-                            structure.hubbard.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                        #print("done. Inspect structure.hubbard")  
-        elif isinstance(structure,HubbardStructureData): # we do not do anything, we let the user define the Hubbard U 
+        if isinstance(structure,HubbardStructureData): # we do not do anything, we let the user define the Hubbard U 
             pass #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
-            #if hubbard_params is not None and magmom is not None:
-            #    for kind, U in hubbard_params.items():
-            #        structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                #print("done. Inspect structure.hubbard")  
-            #    structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         else: # orm.StructureData
             # we want DFT+U only if magmoms are there. 
             # NOTE: I don't think is always the case. 
@@ -464,8 +445,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """
         if isinstance(self.inputs.structure, HubbardStructureData):
             self.ctx.structure_type = HubbardStructureData
-        elif isinstance(self.inputs.structure, StructureData):
-            self.ctx.structure_type = StructureData
         else:
             self.ctx.structure_type = LegacyStructureData
         
@@ -538,10 +517,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # checking if we are using the atomistic.StructureData or not. 
         # NOTE: the atomistic.StructureData is not yet implemented, this is just a placehoder.
         # to use magnetization info, we need always to pass `magmom` as input.
-        if isinstance(self.ctx.structure, StructureData):
-            if "magnetization" in self.ctx.structure.get_defined_properties():
-                self.ctx.magmom = self.ctx.structure.get_property_attribute("magnetization")["moments"]
-        elif "magmom" in self.inputs:
+        if "magmom" in self.inputs:
             self.ctx.magmom = self.inputs.magmom.get_list()
             
         if hasattr(self.inputs,"hubbard_dict"):
@@ -570,7 +546,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             self.report("No muon sites found. Exiting the workflow.")
             return self.exit_codes.ERROR_NO_SUPERCELLS
         else:
-            self.report(f"Number of muon sites found: {self.ctx.mu_lst}")
+            self.report(f"Number of muon sites found: {len(self.ctx.mu_lst)}")
             
         return
     
@@ -687,9 +663,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             
             # we then assign the Hubbard parameters if needed
             if isinstance(self.inputs.structure, HubbardStructureData):
+                self.report(f"Generating supercell #{i_index} with Hubbard parameters.")
                 inputs.structure = create_hubbard_structure(inputs.structure,self.inputs.structure)
-            elif self.ctx.hubbardu_dict and not isinstance(inputs.structure, HubbardStructureData) and "magmom" in self.inputs:
-                self.report("Enforcing DFT+U, as magmoms are defined and U parameters are available.")
+            elif self.ctx.hubbardu_dict and "magmom" in self.inputs:
+                self.report(f"Enforcing DFT+U for supercell #{i_index}, as magmoms are defined and U parameters are available.")
                 inputs.structure = create_hubbard_structure(inputs.structure,self.ctx.hubbardu_dict)
                 
             
