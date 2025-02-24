@@ -109,7 +109,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         spec.input(
             "pseudo_family",
             valid_type=orm.Str,
-            default=lambda: orm.Str("SSSP/1.2/PBE/efficiency"),
+            default=lambda: orm.Str("SSSP/1.3/PBE/efficiency"),
             required=False,
             help="The label of the pseudo family",
         )
@@ -298,7 +298,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         hubbard: bool = True,
         hubbard_dict: dict = None,
         spin_pol_dft: bool = True,
-        pseudo_family: str ="SSSP/1.2/PBE/efficiency",
+        pseudo_family: str ="SSSP/1.3/PBE/efficiency",
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
