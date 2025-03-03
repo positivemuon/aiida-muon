@@ -12,7 +12,9 @@ from ase import Atoms
 # NOTE: these functions are used in the aiidalab-qe-muon plugin, so a change should be tested against it.
 
 def refine_mapping(table,mapping):
-    
+    """
+    Utility function the refine the mapping of the muon sites to the cluster labels.
+    """
     new_mapping = {}
     for i,idx in enumerate(mapping):
         cluster_label = table['label'][table.muon_index == str(idx)].values[0]
@@ -279,7 +281,10 @@ def produce_collective_unit_cell(findmuon_output_node: orm.Node, before_clusteri
                 findmuon_output_node.all_sites.get_dict()[key][0]
             )
             musite = py_struc.frac_coords[py_struc.atomic_numbers.index(1)]
-            mupos = np.dot(musite, sc_matrix) % 1
+            if not supercell:
+                mupos = np.dot(musite, sc_matrix) % 1
+            else:
+                mupos = musite
             # bad workaround for strange bug.
             if len(mupos) == 1:
                 mupos = mupos[0]
