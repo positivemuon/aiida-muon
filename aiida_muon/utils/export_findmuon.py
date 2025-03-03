@@ -245,7 +245,7 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
     # adding the clustering information.
     clustering = get_clustering_after_run(findmuon_output_node.all_index_uuid.creator.caller)
     refined_mapping = refine_mapping(df_all.transpose(),clustering["mapping"])
-    df_all.loc["clustering"] = [refined_mapping.pop(label,label) for label in df_all.loc["label"]]
+    df_all.loc["cluster group"] = [refined_mapping.pop(label,label) for label in df_all.loc["label"]]
 
     # then swap row and columns (for sure can be done already above for df, but useful to keep the same order before this point)
     df = df.transpose()
