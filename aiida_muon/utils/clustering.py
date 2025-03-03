@@ -67,7 +67,7 @@ def prune_too_close_pos(
 
     Suggestions:
                  1. modify -1 into the index of the first atom that matched the conditions
-                    on energy and distance.
+                    on energy and distance. -> this is the mapping
                  2. change `energies` into `scalar_value` to make it more general.
 
     """
@@ -76,6 +76,8 @@ def prune_too_close_pos(
     lattice = host_lattice.lattice
 
     s_idx = np.arange(len(frac_positions))
+    mapping = np.arange(len(frac_positions)) + 1  
+    mapping[0] = 1
 
     for i, pi in enumerate(frac_positions):
         for j, pj in enumerate(frac_positions):
@@ -87,13 +89,17 @@ def prune_too_close_pos(
                         abs(energies[i] - energies[j]) < e_tol
                     ):
                         s_idx[j] = -1
+                        
+                        mapping[j] = mapping[i]
+                        #print(i,j,mapping)
                 else:
                     if np.linalg.norm(diff, axis=0) < min_distance:
                         s_idx[j] = -1
+                        mapping[j] = mapping[i]
 
     # frac_positions = np.delete(frac_positions,s_idx,0) #use if append
     # frac_positions = frac_positions[s_idx == np.arange(len(frac_positions))]
-    return s_idx
+    return s_idx, mapping
 
 def find_equivalent_positions(
     frac_coords, host_lattice, atol=1e-3, energies=None, e_tol=0.05
@@ -226,7 +232,9 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
     a_tol = 1e-3  # symmetry tolerance for printing equi sites in Ang
 
     # Step1
-    idx = prune_too_close_pos(mu_list, p_smag, d_tol, enrg_list)
+    idx, mapping = prune_too_close_pos(mu_list, p_smag, d_tol, enrg_list)
+    #print(f"idx: {idx}")
+    #print(f"mapping: {mapping}")
     mu_list2 = mu_list[idx == np.arange(len(mu_list))]
     enrg_list2 = enrg_list[idx == np.arange(len(enrg_list))]
     idx_list2 = idx_list[idx == np.arange(len(idx_list))]
@@ -273,7 +281,7 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
                     # identify which site it is magnetic equivalent to with the label and append
                     new_pos_to_calc.append((idx_list3[i], j.tolist()))
 
-    return clus_pos_sorted, new_pos_to_calc
+    return clus_pos_sorted, new_pos_to_calc, mapping
 
 def get_poslist1_not_in_list2(pos_lst1, pos_lst2, host_lattice, d_tol=0.5):
     """
@@ -327,7 +335,7 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
     else:
         st_smag = input_st.copy()
 
-    clus_pos, new_pos = cluster_unique_sites(
+    clus_pos, new_pos, mapping = cluster_unique_sites(
         idx_lst, mu_lst, enrg_lst, p_st=input_st, p_smag=st_smag
     )
 
@@ -357,4 +365,43 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
 
     assert len(clus_pos) == len(uniq_clus_pos)
 
-    return {"unique_pos": uniq_clus_pos, "mag_inequivalent": nw_stc_calc}
+    return {"unique_pos": uniq_clus_pos, "mag_inequivalent": nw_stc_calc, "mapping": mapping}
+
+
+def get_clustering_after_run(findmuon_node):
+    """
+    This function is called after the findmuon workchain has been run.
+    It loads the results of the workchain and the input structure and
+    calls the function "analyze_structures" to cluster the relaxed muon
+    positions.
+
+    Returns:
+    (i) List of relaxed unique candidate sites supercell structures
+    (ii) List of to be calculated magnetic inequivalent supercell structures
+    """
+    # load the results of the workchain
+    rlxd_results = []
+    for idx, result in findmuon_node.outputs.all_sites.get_dict().items():
+        rlxd_result = {
+            'idx': idx,
+            'rlxd_struct': result[0],
+            'energy': result[1]
+        }
+        rlxd_results.append(rlxd_result)
+        
+    input_st = findmuon_node.inputs.structure.get_pymatgen()
+    
+    # get the initial supercell structure
+    init_supc = input_st.copy()
+    sc_matrix = [
+        findmuon_node.outputs.all_index_uuid.creator.caller.inputs.sc_matrix.get_list()
+    ]
+    init_supc.make_supercell(sc_matrix[0])
+
+    # get the magnetic moments
+    if hasattr(findmuon_node.inputs, 'magmom'):
+        magmom = findmuon_node.inputs.magmom
+    else:
+        magmom = None
+
+    return analyze_structures(init_supc, rlxd_results, input_st, magmom)

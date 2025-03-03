@@ -52,6 +52,7 @@ def gensup(
     mu_list, 
     sc_mat,
     only_one_cell = False,
+    validate_proximity=True
     ):
     """
     This makes the supercell with the given SC matrix.
@@ -60,6 +61,9 @@ def gensup(
     if only_one_cell is True, then the supercell is made only once and 
     we append all the sites in the same supercell. Useful for pre-processing visualizations.
 
+    the validate_proximity is set to False to avoid the error of muon being too close to each
+    other, when we use only_one_cell=True.
+    
     Returns: list of supercell (pymatgen) structures with muon.
               Number of supercells depends on number of imput mulist
     """
@@ -79,7 +83,7 @@ def gensup(
             species="H",
             coords=ij_sc,
             coords_are_cartesian=False,
-            validate_proximity=True,
+            validate_proximity=validate_proximity,
             properties={"kind_name": "H"},
         )
         supc_list.append(p_scst)
@@ -107,7 +111,7 @@ def generate_supercell_with_impurities(
         )
 
     # 3 produce the supercells
-    supc_list = gensup(structure, mu_list, sc_matrix, only_one_cell=True)
+    supc_list = gensup(structure, mu_list, sc_matrix, only_one_cell=True, validate_proximity=False)
     
     return supc_list[0]
         
