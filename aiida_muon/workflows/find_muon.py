@@ -776,7 +776,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
     def new_struct_after_analyze(self):
         """Check if there is new magnetic inequivalent sites"""
-        self.report("Checking new structures to calculate... {len(self.ctx.supc_list) > 0}")
+        self.report(f"Checking new structures to calculate... {len(self.ctx.supc_list) > 0}")
 
         return len(self.ctx.supc_list) > 0
 
