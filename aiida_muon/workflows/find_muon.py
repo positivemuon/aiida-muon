@@ -337,11 +337,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         else: # orm.StructureData
             # we want DFT+U only if magmoms are there. 
             # NOTE: I don't think is always the case. 
-            if hubbard_params is not None and magmom is not None and hubbard:
-                structure = HubbardStructureData.from_structure(structure)
-                for kind, U in hubbard_params.items():
-                    structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
+            if hubbard_params and magmom and hubbard:
+                if len(hubbard_params) == 0:
+                    pass
+                else:
+                    structure = HubbardStructureData.from_structure(structure)
+                    for kind, U in hubbard_params.items():
+                        structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                    structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         
                  
         #### IsolatedImpurityWorkChain
