@@ -69,7 +69,7 @@ def check_get_hubbard_u_parms(p_st, u_dict=None, new_structuredata=False):
             # check is in the dictorionary
             if spk2 in U_dict_used:
                 hub_u[spk] = U_dict_used[spk2]
-        if hub_u:
+        if len(hub_u.keys())>0:
             return hub_u
         else:
             return None
