@@ -15,7 +15,9 @@ from pymatgen.util.coord import pbc_shortest_vectors
 from aiida.engine import calcfunction
 from aiida import orm
 from aiida.orm import StructureData as LegacyStructureData
+from aiida_quantumespresso.data.hubbard_structure import HubbardStructureData
 
+from aiida_muon.utils.hubbard import create_hubbard_structure
 
 
 def get_collinear_mag_kindname(p_st, magm, half=True):

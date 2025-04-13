@@ -63,7 +63,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         spec.input(
             "structure",
-            valid_type=(StructureData, LegacyStructureData),
+            valid_type=(StructureData, LegacyStructureData, HubbardStructureData),
             required=False,
             help="Input initial structure",
         )
@@ -323,30 +323,30 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
-                
-        _overrides, start_mg_dict, structure = get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft)
-        
+
+        # the get defaul also changes the structure, if needed (magmoms and hubbardstructuredata as input)
+        _overrides, start_mg_dict, structure, magmom = get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft)
+            
         if enforce_defaults:
             overrides = recursive_merge(overrides,_overrides)
         
         #check on the structure: if hubbard is needed, do it with append onsite... if the structure is already stored, clone it. 
         # NOTE: `check_get_hubbard_u_parms` will only return the dictionary if we have more than 2 species in the structure (muon excluded).
         hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen(), u_dict=hubbard_dict)
-        if isinstance(structure,HubbardStructureData): # we do not do anything, we let the user define the Hubbard U 
-            pass #print("This is HubbardStructureData, to have backward compatibility with old StructureData and forward compatibility with qe>=7.1 .")
+
+        if isinstance(structure, HubbardStructureData): # we do not do anything, we let the user define the Hubbard U 
+            if not hubbard:
+                # we can lose the Hubbard info in this way:
+                structure = LegacyStructureData(ase = structure.get_ase())
         else: # orm.StructureData
-            # we want DFT+U only if magmoms are there. 
+            # we define automatic DFT+U settings only if magmoms are there, in this case. 
             # NOTE: I don't think is always the case. 
-            if hubbard_params and magmom and hubbard:
-                if len(hubbard_params) == 0:
-                    pass
-                else:
-                    structure = HubbardStructureData.from_structure(structure)
-                    for kind, U in hubbard_params.items():
-                        structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
-                    structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
+            if len(hubbard_params) > 0 and magmom and hubbard:
+                structure = HubbardStructureData.from_structure(structure)
+                for kind, U in hubbard_params.items():
+                    structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
+                structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         
-                 
         #### IsolatedImpurityWorkChain
         builder_impuritysupercellconv = IsolatedImpurityWorkChain.get_builder_from_protocol(
                 pw_code = pw_code,
@@ -526,7 +526,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if hasattr(self.inputs,"hubbard_dict"):
             self.ctx.hubbardu_dict = self.inputs.hubbard_dict.get_dict()
         else:
-            self.ctx.hubbardu_dict = None
+            self.ctx.hubbardu_dict = {}
         
         # init relaxation calc count
         self.ctx.n = 0
@@ -656,19 +656,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         for i_index in range(len(supercell_list)):
             
-            if self.ctx.structure_type == HubbardStructureData:
-                # we need to create a new HubbardStructureData from the pymatgen supercell
-                # using the LegacyStructureData constructor first
-                inputs.structure = LegacyStructureData(pymatgen=supercell_list[i_index])
-                inputs.structure = HubbardStructureData.from_structure(inputs.structure)
-            else:
-                inputs.structure = self.ctx.structure_type(pymatgen=supercell_list[i_index])
+            # Here we put a logic to handle the creation of a supercell if Hubbard params are there.
+            # using the LegacyStructureData constructor first
+            inputs.structure = LegacyStructureData(pymatgen=supercell_list[i_index])
             
-            # we then assign the Hubbard parameters if needed
-            if isinstance(self.inputs.structure, HubbardStructureData):
+            # we then assign the Hubbard parameters only if needed
+            if self.ctx.structure_type == HubbardStructureData and self.inputs.hubbard:
                 self.report(f"Generating supercell #{i_index} with Hubbard parameters.")
-                inputs.structure = create_hubbard_structure(inputs.structure,self.inputs.structure)
-            elif self.ctx.hubbardu_dict and "magmom" in self.inputs:
+                inputs.structure = create_hubbard_structure(inputs.structure, self.inputs.structure)
+            elif len(self.ctx.hubbardu_dict) > 0 and "magmom" in self.inputs and self.inputs.hubbard:
                 self.report(f"Enforcing DFT+U for supercell #{i_index}, as magmoms are defined and U parameters are available.")
                 inputs.structure = create_hubbard_structure(inputs.structure,self.ctx.hubbardu_dict)
                 
@@ -800,6 +796,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             magnetic = self.inputs.magmom is not None
             
         self.report(f"Checking if structure is magnetic... {magnetic}")
+        
+        return magnetic
             
     def spin_polarized_dft(self):
         """Checking if we need spin polarization in DFT"""
@@ -835,18 +833,17 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             rlx_st.translate_sites(
                 range(rlx_st.num_sites), -musite, frac_coords=True, to_unit_cell=False
             )
-            if self.ctx.structure_type == HubbardStructureData:
-                inputs.pw.structure = LegacyStructureData(pymatgen=rlx_st)
-                inputs.pw.structure = HubbardStructureData.from_structure(inputs.pw.structure)
-            else:
-                inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
-                
-            #inputs.pw.structure = self.ctx.structure_type(pymatgen=rlx_st)
-            if isinstance(inputs.pw.structure,HubbardStructureData):
-                inputs.pw.structure = create_hubbard_structure(inputs.pw.structure,self.inputs.structure)
-            elif self.ctx.hubbardu_dict and not isinstance(inputs.pw.structure,HubbardStructureData) and "magmom" in self.inputs:
-                inputs.pw.structure = create_hubbard_structure(inputs.pw.structure,orm.Dict(dict=self.ctx.hubbardu_dict))
             
+            inputs.pw.structure = LegacyStructureData(pymatgen=rlx_st)
+            
+            # we then assign the Hubbard parameters only if needed
+            if self.ctx.structure_type == HubbardStructureData and self.inputs.hubbard:
+                self.report(f"Generating supercell #{j_index} with Hubbard parameters.")
+                inputs.pw.structure = create_hubbard_structure(inputs.pw.structure, self.inputs.structure)
+            elif len(self.ctx.hubbardu_dict) > 0 and "magmom" in self.inputs and self.inputs.hubbard:
+                self.report(f"Enforcing DFT+U for supercell #{j_index}, as magmoms are defined and U parameters are available.")
+                inputs.pw.structure = create_hubbard_structure(inputs.pw.structure, self.ctx.hubbardu_dict)
+                
             inputs.pw.pseudos = get_pseudos(
                 inputs.pw.structure, self.inputs.pseudo_family.value
             )
@@ -966,11 +963,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #
             # rlx_st = clus['rlxd_struct']
             rlx_st = Structure.from_dict(clus["rlxd_struct"])
-            if self.ctx.structure_type == HubbardStructureData:
-                rlx_struct = LegacyStructureData(pymatgen=rlx_st)
-                rlx_struct = HubbardStructureData.from_structure(rlx_struct)
-            else:
-                rlx_struct = self.ctx.structure_type(pymatgen=rlx_st)
+            rlx_struct = LegacyStructureData(pymatgen=rlx_st)
+            
+            # we then assign the Hubbard parameters only if needed
+            if self.ctx.structure_type == HubbardStructureData and self.inputs.hubbard:
+                self.report(f"Generating supercell #{j_index} with Hubbard parameters.")
+                rlx_struct = create_hubbard_structure(rlx_struct, self.inputs.structure)
+            elif len(self.ctx.hubbardu_dict) > 0 and "magmom" in self.inputs and self.inputs.hubbard:
+                self.report(f"Enforcing DFT+U for supercell #{j_index}, as magmoms are defined and U parameters are available.")
+                rlx_struct = create_hubbard_structure(rlx_struct, self.ctx.hubbardu_dict)
+
             if not self.inputs.spin_pol_dft:
                 cnt_field = 0
             else:
@@ -1052,6 +1054,7 @@ def get_dict_output(outdata):
 
     return orm.Dict(dict=out_dict)
 
+
 #Creates the default used in the protocols and in the forcing inputs step.
 def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft):
     _overrides = {
@@ -1089,17 +1092,29 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
     if charge_supercell:
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
         
-    # MAGMOMS       
-    if magmom and spin_pol_dft: # drop this... correct ?and not hasattr(structure, "magnetic"):
+    if magmom:
         rst_mg = make_collinear_getmag_kind(
             structure, magmom,
         )
-        structure = rst_mg["struct_magkind"]
+        new_structure = rst_mg["struct_magkind"]        
         start_mg_dict = rst_mg["start_mag_dict"]
         
+        # we need to convert the structure into HubbardStructureData, if needed:
+        if isinstance(structure, HubbardStructureData):
+            from aiida_muon.utils.manage_new_structure import reassign_kinds
+            # first I need to remap the kinds of the old structure to the new ones.
+            old_structure = reassign_kinds(
+                    structure,
+                    new_structure.get_kind_names(),
+                )
+            
+            # then I can create the new hubbard structure with the new kinds.
+            structure = create_hubbard_structure(new_structure, old_structure)
+        else:
+            structure = new_structure
+            
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["nspin"]= 2
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["starting_magnetization"] = start_mg_dict.get_dict()
-        
     else:
         start_mg_dict = None
     
@@ -1126,7 +1141,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u_kind"] = 0
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict'''
         
-    return _overrides, start_mg_dict, structure
+    return _overrides, start_mg_dict, structure, magmom
 
 
 def iterdict(d,key):

@@ -60,31 +60,31 @@ def check_get_hubbard_u_parms(p_st, u_dict=None, new_structuredata=False):
         spc = [str(atm.specie.symbol) for atm in p_st]
         d_spc = list(set(spc))
 
+    if 1 in p_st.atomic_numbers:
+        is_muon_there = 1
+    else:
+        is_muon_there = 0
     # 1 element compounds are not given any U values, 2 for the muon specie
-    if len(d_spc) > 2:  # TODO: is this correct? Is it really needed?
-        hub_u = {}
+    hub_u = {}
+    if len(d_spc) > 1+is_muon_there:  # TODO: is this correct? Is it really needed?
         for spk in d_spc:
             # remove numbers from species name
             spk2 = "".join(filter(str.isalpha, spk))
             # check is in the dictorionary
             if spk2 in U_dict_used:
                 hub_u[spk] = U_dict_used[spk2]
-        if len(hub_u.keys())>0:
-            return hub_u
-        else:
-            return None
-    else:
-        return None
+    
+    return hub_u
     
     
 @calcfunction
-def create_hubbard_structure(structure: [HubbardStructureData, LegacyStructureData], hubbard_dict: [dict, HubbardStructureData]):
+def create_hubbard_structure(structure: [LegacyStructureData], hubbard_dict: [dict, HubbardStructureData]):
     """
     Create a Hubbard structure from a given structure and Hubbard parameters.
     
     NOTE: It works in two ways:
-    1 - If both inputs are HubbardStructureData, it creates a new HubbardStructureData with the structure of the first input and the Hubbard parameters of the second input.
-    2 - If the first input is a LegacyStructureData and the second input is a dictionary, it creates a new HubbardStructureData with the structure of the first 
+    1 - If second input is HubbardStructureData, it creates a new HubbardStructureData with the structure of the first input and the Hubbard parameters of the second input.
+    2 - If the second input is a dictionary, it creates a new HubbardStructureData with the structure of the first 
         input and the Hubbard parameters of the second input.
 
     Parameters:
@@ -100,19 +100,19 @@ def create_hubbard_structure(structure: [HubbardStructureData, LegacyStructureDa
     The logic is naive, to be optimized.
     """
     
-    if isinstance(structure, HubbardStructureData) and isinstance(hubbard_dict, HubbardStructureData): 
-        hubbard_structure = HubbardStructureData.from_structure(LegacyStructureData(pymatgen=structure.get_pymatgen()))
+    if isinstance(hubbard_dict, HubbardStructureData): 
+        hubbard_structure = HubbardStructureData.from_structure(structure)
         for p in hubbard_dict.hubbard.parameters:
             kind = hubbard_dict.sites[p.atom_index].kind_name
             manifold = p.atom_manifold
             value = p.value
             hubbard_structure.initialize_onsites_hubbard(kind, manifold, value, 'U', use_kinds=True)
-    elif isinstance(structure, LegacyStructureData): 
+    elif isinstance(hubbard_dict, dict): 
         hubbard_structure = HubbardStructureData.from_structure(structure)
         for kind, U in hubbard_dict.items():
             hubbard_structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
 
-    hubbard_structure.hubbard = Hubbard.from_list(hubbard_structure.hubbard.to_list(), projectors="atomic")
+    #hubbard_structure.hubbard = Hubbard.from_list(hubbard_structure.hubbard.to_list(), projectors="atomic")
     return hubbard_structure
 
 # def assign_hubbard_parameters(structure: atomistic.StructureData, hubbard_dict):
