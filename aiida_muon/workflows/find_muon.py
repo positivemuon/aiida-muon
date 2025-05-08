@@ -14,6 +14,10 @@ from aiida.common import AttributeDict
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from typing import Union
 
+from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import (
+    create_kpoints_from_distance,
+)
+
 from aiida_impuritysupercellconv.workflows.impuritysupercellconv import input_validator as impuritysupercellconv_input_validator
 
 from aiida.orm import StructureData as LegacyStructureData
@@ -141,6 +145,30 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             required=False,
             help="To run charged supercell for positive muon or not (neutral supercell)",
         )
+        spec.input(
+            "gamma_pre_relax",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(False),
+            help="To run gamma pre-relaxation or not",
+        )
+        spec.input(
+            "ML_pre_relax",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(False),
+            help="To run ML pre-relaxation or not",
+        )
+        spec.input(
+            "skip_dft_relax",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(False),
+            help="To skip DFT relaxation or not",
+        )
+        spec.input(
+            "supercells_list",
+            valid_type=orm.List,
+            required=False,
+            help="List of supercells to be used for the relaxation",
+        )
 
         spec.expose_inputs(
             PwRelaxWorkChain,
@@ -210,10 +238,20 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.check_supercell_convergence,          
             ),
             cls.setup,
-            cls.get_initial_muon_sites,
-            cls.get_initial_supercell_structures,
-            cls.compute_supercell_structures,
-            cls.collect_relaxed_structures,
+            if_(cls.should_generate_supercells)(
+                cls.get_initial_muon_sites,
+                cls.get_initial_supercell_structures,
+            ),
+            if_(cls.should_run_gamma_relaxations)(
+                cls.prepare_gamma_relaxations,
+                cls.compute_supercell_structures,
+                cls.collect_relaxed_structures,
+            ),
+            if_(cls.should_run_full_relaxations)(
+                cls.prepare_full_relaxations,
+                cls.compute_supercell_structures,
+                cls.collect_relaxed_structures,
+            ),
             cls.analyze_relaxed_structures,
             if_(cls.new_struct_after_analyze)(
                 cls.compute_supercell_structures,
@@ -299,6 +337,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         hubbard_dict: dict = None,
         spin_pol_dft: bool = True,
         pseudo_family: str ="SSSP/1.3/PBE/efficiency",
+        gamma_pre_relax: bool = False,
+        ML_pre_relax: bool = False,
+        skip_dft_relax: bool = False,
+        supercells_list: list = [],
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -437,6 +479,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             # I don't like this.
             if i in overrides.keys():
                 builder[i] = overrides[i] 
+                
+        builder.gamma_pre_relax = orm.Bool(gamma_pre_relax)
+        builder.ML_pre_relax = orm.Bool(ML_pre_relax)
+        builder.skip_dft_relax = orm.Bool(skip_dft_relax)
+        
+        if builder.ML_pre_relax:
+            raise NotImplementedError("Machine learning relaxations not implemented yet.")
+        
+        if len(supercells_list)>0:
+            builder.supercells_list = orm.List(list=supercells_list)
         
         return builder
     
@@ -532,8 +584,20 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.n = 0
         self.ctx.n_uuid_dict = {}
         
+        self.ctx.set_gamma_only = False
+        
+        self.ctx.supc_list = [orm.load_node(uuid) for uuid in self.inputs.supercells_list.get_list()] if hasattr(self.inputs,"supercells_list") else []
+
         return
-            
+       
+    def should_generate_supercells(self):
+        """Check if we need to generate supercells.
+        If we provide supercell_list, they need to already have the muon inside.
+        TODO: add check for that.
+        """
+        
+        return len(self.ctx.supc_list) == 0
+         
     def get_initial_muon_sites(self):
         """Get list of starting muon sites.
         
@@ -565,6 +629,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if len(self.ctx.supc_list) == 0:
             self.report("No Supercells, please decrease the mu_spacing parameter. Exiting the workflow...")
             return self.exit_codes.ERROR_NO_SUPERCELLS
+        
+        self.ctx.supc_list = self.generate_supercells_list()
 
     def setup_pw_overrides(self):
         """Get the required overrides i.e pw parameter setup. STILL INCLUDED IN THE OUTLINE"""
@@ -636,6 +702,128 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             )
         self.ctx.overrides = overrides
 
+    def generate_supercells_list(self):
+        """Generate the supercell list from pymatgen objects to 
+        StructureData objects.
+        """
+        self.report("Generating supercell list")
+        supercell_list = self.ctx.supc_list
+        new_supercell_list = []
+        
+        for i_index in range(len(supercell_list)):
+            
+            # Here we put a logic to handle the creation of a supercell if Hubbard params are there.
+            # using the LegacyStructureData constructor first
+            if isinstance(supercell_list[i_index], Structure): # pymatgen object
+                structure = LegacyStructureData(pymatgen=supercell_list[i_index])
+            else:
+                structure = supercell_list[i_index]
+            
+            # we then assign the Hubbard parameters only if needed
+            if self.ctx.structure_type == HubbardStructureData and self.inputs.hubbard and not isinstance(structure, HubbardStructureData):
+                self.report(f"Generating supercell #{i_index} with Hubbard parameters.")
+                structure = create_hubbard_structure(structure, self.inputs.structure)
+            elif len(self.ctx.hubbardu_dict) > 0 and "magmom" in self.inputs and self.inputs.hubbard and not isinstance(structure, HubbardStructureData):
+                self.report(f"Enforcing DFT+U for supercell #{i_index}, as magmoms are defined and U parameters are available.")
+                structure = create_hubbard_structure(structure,self.ctx.hubbardu_dict)
+            
+            new_supercell_list.append(structure)
+        
+        return new_supercell_list
+
+    def should_run_gamma_relaxations(self):
+        """Check if we should run gamma relaxations.
+        """      
+        inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+            
+        if not "kpoints_distance" in inputs.base:
+            self.report(f"Setting kpoints distance to be: {self.inputs.kpoints_distance.value}")
+            inputs.base.kpoints_distance = self.inputs.kpoints_distance
+        
+        mesh = create_kpoints_from_distance(
+                    self.ctx.supc_list[0],
+                    orm.Float(inputs.base.kpoints_distance),
+                    orm.Bool(False),
+                    metadata={"store_provenance": False},
+                ).get_kpoints_mesh()
+    
+        if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
+            self.report("We don't need a Gamma point pre-relaxation, Gamma is anyway the only sampled point.")
+            self.ctx.set_gamma_only = True # so we set gamma point only in the dft runs
+            return False
+
+        if self.inputs.gamma_pre_relax:
+            return True
+        else:
+            return False
+    
+    def prepare_gamma_relaxations(self):
+        self.ctx.enforce_gamma = True
+        self.ctx.run_type = "gamma"
+        return
+    
+    def should_run_full_relaxations(self):
+        """Check if we should run full relaxations.
+        """
+        if self.inputs.skip_dft_relax:
+            self.report("Skipping DFT relaxations as specified in the inputs.")
+            return False
+        
+        return True
+
+    def prepare_full_relaxations(self):
+        self.ctx.enforce_gamma = False
+        self.ctx.run_type = "full"
+        return
+    
+    def submit_dft_relaxations(self, enforce_gamma=False):
+        """Submit the DFT relaxations for each supercell.
+        if enforce_gamma is True, we use the gamma point only, even if 
+        we have a different k-point mesh. This can be useful for pre-relaxation
+        calculations.
+        """
+        inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        
+        gamma_only_suffix = ""
+        
+        # Make sure we have a kpoints distance
+        if enforce_gamma:
+            # if we enforce_gamma but anyway the mesh is 1x1x1, we skip this step and we run the relaxation as is.
+            #self.report("Enforcing gamma point only for the supercell relaxations.")
+            mesh = orm.KpointsData()
+            mesh.set_kpoints_mesh([1, 1, 1])
+            inputs.base.kpoints = mesh
+            gamma_only_suffix = "_gamma"
+            self.report("Using gamma point only for the supercell relaxations.")
+            inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            
+        elif self.ctx.set_gamma_only:
+            # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True
+            self.report("Using gamma point only for the supercell relaxations.")
+            inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            
+        for i_index in range(len(self.ctx.supc_list)):
+
+            inputs.structure = self.ctx.supc_list[i_index]
+            
+            # we define the pseudos again (now we have the structure+H)
+            inputs.base.pw.pseudos = get_pseudos(
+                inputs.structure, self.inputs.pseudo_family.value
+            )
+            
+            # Set the `CALL` link label and submission
+            inputs.metadata.call_link_label = f'supercell_{i_index:02d}' + gamma_only_suffix
+            future = self.submit(PwRelaxWorkChain, **inputs)
+            # key = f'workchains.sub{i_index}' #nested sub
+            key = f"workchain_{i_index}"
+            self.report(
+                f"Launching PwRelaxWorkChain (PK={future.pk}) for supercell structure {self.ctx.supc_list[i_index].get_formula()} with index {i_index}" \
+                    + gamma_only_suffix.replace("_gamma",", Gamma only sampling")
+            )
+            self.to_context(**{key: future})
+        
+        return
+        
     def compute_supercell_structures(self):
         """Run relax workflows for each muon supercell.
         
@@ -645,54 +833,30 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """
 
         self.report("Computing muon supercells")
-        supercell_list = self.ctx.supc_list
+        self.ctx.supc_list = self.generate_supercells_list()
         
-        inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        if self.ctx.run_type == "gamma":
+            self.report("Running gamma point DFT relaxations")
+            self.submit_dft_relaxations(enforce_gamma=True)
+        elif self.ctx.run_type == "full":
+            self.report("Running DFT relaxations")
+            self.submit_dft_relaxations(enforce_gamma=False)
+        elif self.ctx.run_type == "ML":
+            self.report("Running ML relaxations")
+            self.run_machine_learning_relaxations()    
         
-        # Make sure we have a kpoints distance
-        if not "kpoints_distance" in inputs.base:
-            self.report(f"Setting kpoints distance to be: {self.inputs.kpoints_distance.value}")
-            inputs.base.kpoints_distance = self.inputs.kpoints_distance
-        
-        for i_index in range(len(supercell_list)):
-            
-            # Here we put a logic to handle the creation of a supercell if Hubbard params are there.
-            # using the LegacyStructureData constructor first
-            inputs.structure = LegacyStructureData(pymatgen=supercell_list[i_index])
-            
-            # we then assign the Hubbard parameters only if needed
-            if self.ctx.structure_type == HubbardStructureData and self.inputs.hubbard:
-                self.report(f"Generating supercell #{i_index} with Hubbard parameters.")
-                inputs.structure = create_hubbard_structure(inputs.structure, self.inputs.structure)
-            elif len(self.ctx.hubbardu_dict) > 0 and "magmom" in self.inputs and self.inputs.hubbard:
-                self.report(f"Enforcing DFT+U for supercell #{i_index}, as magmoms are defined and U parameters are available.")
-                inputs.structure = create_hubbard_structure(inputs.structure,self.ctx.hubbardu_dict)
-                
-            
-            # we define the pseudos again (now we have the structure+H)
-            inputs.base.pw.pseudos = get_pseudos(
-                inputs.structure, self.inputs.pseudo_family.value
-            )
-            
-            
+        return
 
-            # Set the `CALL` link label and submission
-            inputs.metadata.call_link_label = f'supercell_{i_index:02d}'
-            future = self.submit(PwRelaxWorkChain, **inputs)
-            # key = f'workchains.sub{i_index}' #nested sub
-            key = f"workchain_{i_index}"
-            self.report(
-                f"Launching PwRelaxWorkChain (PK={future.pk}) for supercell structure {supercell_list[i_index].formula} with index {i_index}"
-            )
-            self.to_context(**{key: future})
-
+    def run_machine_learning_relaxations(self):
+        raise NotImplementedError("Machine learning relaxations not implemented yet.")
+    
     def collect_relaxed_structures(self):
-        """Retrieve final positions and energy from the relaxed structures.
-        
+        """Retrieve final positions and energy from the relaxed structures.        
         """
 
         self.report("Gathering computed positions and energy")
         supercell_list = self.ctx.supc_list
+        new_supercell_list = [] # we create this list so we can run two relaxations one after the other, like Gamma and full mesh.
 
         computed_results = []
 
@@ -721,7 +885,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 rlx_structure = (
                     workchain.outputs.output_structure.get_pymatgen_structure()
                 )
-                # rlx_structure = workchain.outputs.output_structure
+                new_supercell_list.append(workchain.outputs.output_structure)
 
                 # computed_results.append((pk,rlx_structure,energy))
                 computed_results.append(
@@ -738,7 +902,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 # print(computed_results)
 
         self.ctx.relaxed_outputs = computed_results
+        self.ctx.supc_list = new_supercell_list
+        if len(supercell_list)!= len(new_supercell_list):
+            self.report(
+                f"Relaxation of {len(supercell_list) - len(new_supercell_list)} supercells failed.\n So we skip them and continue with the rest."
+            )
 
+        return
+    
     def analyze_relaxed_structures(self):
         """Analyze relaxed structures.
         
@@ -777,7 +948,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """Check if there is new magnetic inequivalent sites"""
         self.report(f"Checking new structures to calculate... {len(self.ctx.supc_list) > 0}")
 
-        return len(self.ctx.supc_list) > 0
+        if len(self.ctx.supc_list) > 0:
+            self.ctx.run_type = "full"
+            return True
+        return False
 
     def collect_all_results(self):
         """Collecting results of new structures and then append"""
@@ -849,6 +1023,17 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             )
             
             inputs.pop("pseudo_family", None)
+            
+            # check if we need to set gamma only
+            mesh = create_kpoints_from_distance(
+                    inputs.pw.structure,
+                    orm.Float(inputs.kpoints_distance),
+                    orm.Bool(False),
+                    metadata={"store_provenance": False},
+                ).get_kpoints_mesh()
+    
+            if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
+                inputs.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
             
             # Set the `CALL` link label and submit
             inputs.metadata.call_link_label = f'mu_origin_supercell_{j_index:02d}'
@@ -1057,6 +1242,9 @@ def get_dict_output(outdata):
 
 #Creates the default used in the protocols and in the forcing inputs step.
 def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft):
+    
+    formula = structure.get_formula()
+    
     _overrides = {
            "base": {
                 #"pseudo_family": pseudo_family,
@@ -1081,7 +1269,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
                 },
                     "metadata": {
                     "description": "Muon site calculations for "
-                    + structure.get_pymatgen_structure().formula
+                    + formula
                 },
                 },
             },
