@@ -749,7 +749,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     
         if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
             self.report("We don't need a Gamma point pre-relaxation, Gamma is anyway the only sampled point.")
-            self.ctx.set_gamma_only = True # so we set gamma point only in the dft runs
+            self.ctx.set_gamma_only = True # so we set gamma point only... in the dft runs
             return False
 
         if self.inputs.gamma_pre_relax:
@@ -785,6 +785,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
         
         gamma_only_suffix = ""
+
+        # if self.ctx.run_type == "gamma":
+        #     # we use a looser convergence threshold for the gamma point pre-relaxation
+        #     relax_parameters = inputs.base.pw.parameters.get_dict()
+        #     relax_parameters["CONTROL"]["forc_conv_thr"] = relax_parameters["CONTROL"]["forc_conv_thr"] * 50 # TODO: check if this is ok
+        #     inputs.base.pw.parameters = orm.Dict(dict=relax_parameters)
         
         # Make sure we have a kpoints distance
         if enforce_gamma:
@@ -796,11 +802,17 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             gamma_only_suffix = "_gamma"
             self.report("Using gamma point only for the supercell relaxations.")
             inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            if hasattr(inputs.base.pw.parallelization, "get_dict"):
+                if "npool" in inputs.base.pw.parallelization.get_dict():
+                    inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
             
         elif self.ctx.set_gamma_only:
             # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True
             self.report("Using gamma point only for the supercell relaxations.")
             inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            if hasattr(inputs.base.pw, "parallelization"):
+                if "npool" in inputs.base.pw.parallelization.get_dict():
+                    inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
             
         for i_index in range(len(self.ctx.supc_list)):
 
@@ -989,6 +1001,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # inputs["clean_workdir"] = orm.Bool(False) 
 
         #inputs.kpoints_distance = orm.Float(inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid 
+
+        if self.ctx.set_gamma_only:
+            inputs.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            if hasattr(inputs.pw, "parallelization"):
+                if "npool" in inputs.pw.parallelization.get_dict():
+                    inputs.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.pw.parallelization.get_dict().items() if k != "npool"})
         
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
