@@ -28,6 +28,7 @@ dependencies = [
     "pyyaml>=3.0",
     "mulfc @ git+https://github.com/bonfus/muLFC.git@v0.0.4",
     "muesr @ git+https://github.com/bonfus/muesr@master",
+    "aiida-atomistic @ git+https://github.com/mikibonacci/aiida-atomistic.git@develop",
     "aiida-impuritysupercellconv @ git+https://github.com/mikibonacci/aiida-impuritysupercellconv@new_release/cleanup"
 ]
 
