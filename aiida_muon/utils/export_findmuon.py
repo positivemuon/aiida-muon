@@ -11,18 +11,19 @@ from ase import Atoms
 
 # NOTE: these functions are used in the aiidalab-qe-muon plugin, so a change should be tested against it.
 
-def refine_mapping(table,mapping):
+def refine_mapping(table,mapping, list_index):
     """
     Utility function the refine the mapping of the muon sites to the cluster labels.
     Basically, the cluster label is the label of the most representative muon site in the cluster, i.e. the one we show in the unique sites table.
     """
     new_mapping = {}
-    for i,idx in enumerate(mapping):
-        if str(i+1) not in table.muon_index.values:
-            print(f"Warning: muon index {i+1} not found in the table.")
-            continue
+    
+    if len(mapping) != len(list_index):
+        raise ValueError("Mapping and list_index must have the same length.")
+    
+    for i,idx in zip(list_index,mapping):
         cluster_label = table['label'][table.muon_index == str(idx)].values[0]
-        muon_label = table['label'][table.muon_index == str(i+1)].values[0]
+        muon_label = table['label'][table.muon_index == i].values[0]
         #print(f"Muon label: {muon_label} -> Cluster label: {cluster_label}")
         new_mapping[muon_label] = cluster_label
         
@@ -247,12 +248,15 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
     
     # adding the clustering information. This is a list of all sites, but with the index of the representative muon of the cluster: [1,3,3,1,1,6,7,6]
     clustering = get_clustering_after_run(findmuon_output_node.all_index_uuid.creator.caller)
-    refined_mapping = refine_mapping(df_all.transpose(),clustering["mapping"])
+    refined_mapping = refine_mapping(df_all.transpose(),clustering["mapping"], list_index = findmuon_output_node.all_index_uuid.get_dict().keys())
     df_all.loc["cluster group"] = [refined_mapping.pop(label,label) for label in df_all.loc["label"]]
 
     # then swap row and columns (for sure can be done already above for df, but useful to keep the same order before this point)
     df = df.transpose()
     df_all = df_all.transpose()
+
+    # show sorted by cluster group
+    df_all = df_all.sort_values("cluster group")
     
     
     return df, df_all, distortions
