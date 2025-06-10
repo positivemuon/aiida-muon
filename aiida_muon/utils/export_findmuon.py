@@ -14,14 +14,17 @@ from ase import Atoms
 def refine_mapping(table,mapping):
     """
     Utility function the refine the mapping of the muon sites to the cluster labels.
+    Basically, the cluster label is the label of the most representative muon site in the cluster, i.e. the one we show in the unique sites table.
     """
     new_mapping = {}
     for i,idx in enumerate(mapping):
+        if str(i+1) not in table.muon_index.values:
+            print(f"Warning: muon index {i+1} not found in the table.")
+            continue
         cluster_label = table['label'][table.muon_index == str(idx)].values[0]
         muon_label = table['label'][table.muon_index == str(i+1)].values[0]
         #print(f"Muon label: {muon_label} -> Cluster label: {cluster_label}")
         new_mapping[muon_label] = cluster_label
-        
         
     return new_mapping
     
@@ -242,7 +245,7 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
             labels.append(assign_label(i + len(df_all.columns)))
     df_all.loc["label"] = labels
     
-    # adding the clustering information.
+    # adding the clustering information. This is a list of all sites, but with the index of the representative muon of the cluster: [1,3,3,1,1,6,7,6]
     clustering = get_clustering_after_run(findmuon_output_node.all_index_uuid.creator.caller)
     refined_mapping = refine_mapping(df_all.transpose(),clustering["mapping"])
     df_all.loc["cluster group"] = [refined_mapping.pop(label,label) for label in df_all.loc["label"]]

@@ -583,6 +583,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # init relaxation calc count
         self.ctx.n = 0
         self.ctx.n_uuid_dict = {}
+        self.ctx.offset = 0 # offset for the supercell index if we find magnetic inequivalent sites.
         
         self.ctx.set_gamma_only = False
         
@@ -786,11 +787,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         gamma_only_suffix = ""
 
-        # if self.ctx.run_type == "gamma":
-        #     # we use a looser convergence threshold for the gamma point pre-relaxation
-        #     relax_parameters = inputs.base.pw.parameters.get_dict()
-        #     relax_parameters["CONTROL"]["forc_conv_thr"] = relax_parameters["CONTROL"]["forc_conv_thr"] * 50 # TODO: check if this is ok
-        #     inputs.base.pw.parameters = orm.Dict(dict=relax_parameters)
+        if self.ctx.run_type == "gamma":
+            # we use a looser convergence threshold for the gamma point pre-relaxation
+            relax_parameters = inputs.base.pw.parameters.get_dict()
+            relax_parameters["CONTROL"]["forc_conv_thr"] = relax_parameters["CONTROL"]["forc_conv_thr"] * 50 # TODO: check if this is ok
+            inputs.base.pw.parameters = orm.Dict(dict=relax_parameters)
         
         # Make sure we have a kpoints distance
         if enforce_gamma:
@@ -877,6 +878,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #    if not workchain.is_finished_ok
 
         n_notf = 0
+        self.ctx.n, self.ctx.n_uuid_dict = 0, {}
         for i_index in range(len(supercell_list)):
             key = f"workchain_{i_index}"
             workchain = self.ctx[key]
@@ -891,7 +893,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 if float(n_notf) / len(supercell_list) > 0.4:
                     return self.exit_codes.ERROR_RELAX_CALC_FAILED
             else:
-                self.ctx.n += 1
+                self.ctx.n = i_index+self.ctx.offset
                 uuid = workchain.uuid
                 energy = workchain.outputs.output_parameters.get_dict()["energy"]
                 rlx_structure = (
@@ -962,6 +964,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         if len(self.ctx.supc_list) > 0:
             self.ctx.run_type = "full"
+            self.ctx.offset = len(self.ctx.relaxed_outputs_all)  # offset for the supercell index if we find magnetic inequivalent sites.
             return True
         return False
 
