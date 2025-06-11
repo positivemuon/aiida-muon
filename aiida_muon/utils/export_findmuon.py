@@ -17,15 +17,24 @@ def refine_mapping(table,mapping, list_index):
     Basically, the cluster label is the label of the most representative muon site in the cluster, i.e. the one we show in the unique sites table.
     """
     new_mapping = {}
-    
-    if len(mapping) != len(list_index):
+    #print("Refining mapping:", mapping, "for", list_index)
+
+    # we need to remap the mapping to be unique and sorted, so that we can use it as a cluster label.
+    # e.g. if mapping = [1, 2, 2, 1, 1, 6, 7, 6], we want to have {1:1, 2:2, 6:3, 7:4}
+    # and then remap the list_index to the new mapping: [1, 2, 2, 1, 1, 3, 4, 3]
+    unique_sorted = {v: i+1 for i, v in enumerate(sorted(set(mapping)))}
+    remapped = [unique_sorted[x] for x in mapping]
+
+    if len(mapping) != len(remapped):
         raise ValueError("Mapping and list_index must have the same length.")
     
-    for i,idx in zip(list_index,mapping):
-        cluster_label = table['label'][table.muon_index == str(idx)].values[0]
+    for i,idx in zip(list_index,remapped):
+        #print(i,idx)
+        #cluster_label = table['label'][table.muon_index == str(idx)].values[0]
         muon_label = table['label'][table.muon_index == i].values[0]
         #print(f"Muon label: {muon_label} -> Cluster label: {cluster_label}")
-        new_mapping[muon_label] = cluster_label
+        new_mapping[muon_label] = idx
+        #print(table['label'][table.muon_index == str(idx)].values, "->", table['label'][table.muon_index == i].values)
         
     return new_mapping
     
@@ -254,9 +263,6 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
     # then swap row and columns (for sure can be done already above for df, but useful to keep the same order before this point)
     df = df.transpose()
     df_all = df_all.transpose()
-
-    # show sorted by cluster group
-    df_all = df_all.sort_values("cluster group")
     
     
     return df, df_all, distortions
