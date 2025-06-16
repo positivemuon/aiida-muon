@@ -2,4 +2,4 @@
 #
 # The AiiDA plugin for aiida-muon
 #
-__version__ = "1.0.0"
+__version__ = "1.1.0"

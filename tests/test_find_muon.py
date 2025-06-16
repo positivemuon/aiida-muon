@@ -103,3 +103,22 @@ def test_gethubbardu(aiida_profile, generate_workchain):
     process = generate_workchain()
     assert process.setup_magnetic_hubbardu_dict() is None
     assert process.ctx.hubbardu_dict is None
+
+# New tests
+
+def get_correct_inputs_from_builder():
+    # MnO as StructureData + magmoms: enforcing Hubbard
+    # MnO as StructureData + magmoms: deactivating Hubbard
+    # Fe but definig magnetization from overrides of pw inputs
+    # MnO as StructureData + magmoms: deactivating spin-pol (so no magmoms)
+    # MnO as Hubbard + magmoms: deactivating spin-pol
+    raise NotImplementedError("This function is not implemented yet.")
+
+def get_correct_supercells():
+    # Si as StructureData
+    # MnO as StructureData + magmoms: enforcing Hubbard
+    # MnO as StructureData + magmoms: deactivating Hubbard
+    # MnO as Hubbard + magmoms
+    # Si as HubbardStructureData
+    # Si as HubbardStructureData but deactivating Hubbard
+    raise NotImplementedError("This function is not implemented yet.")

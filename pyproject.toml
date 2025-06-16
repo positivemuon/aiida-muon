@@ -5,10 +5,10 @@ build-backend = "flit_core.buildapi"
 [project]
 name = "aiida-muon"
 dynamic = ["version"] # read from aiida_muon/__init__.py
-description = "aiida-muon is allows to find candiate muon implantation sites and hyperfine field by DFT supercell relaxations and from further symmetry and kinetics analysis.  "
+description = "aiida-muon is allows to find candidate muon implantation sites and hyperfine field by DFT supercell relaxations and from further symmetry and kinetics analysis.  "
 authors = [{name = "Muon group Parma"},{name = "Laboratory for Materials Simulations PSI"}]
 readme = "README.md"
-license = {file = "LICENSE"}
+license = {file = "LICENSE.txt"}
 classifiers = [
     "Programming Language :: Python",
     "Intended Audience :: Science/Research",
@@ -26,10 +26,9 @@ dependencies = [
     "pymatgen",
     "spglib>=1.9",
     "pyyaml>=3.0",
-    "mulfc>=0.0.1",
+    "mulfc @ git+https://github.com/bonfus/muLFC.git@v0.0.4",
     "muesr @ git+https://github.com/bonfus/muesr@master",
-    "aiida-atomistic @ git+https://github.com/mikibonacci/aiida-atomistic.git@new_StructureData",
-    "aiida-impuritysupercellconv @ git+https://github.com/positivemuon/aiida-impuritysupercellconv@main#egg=aiida-impuritysupercellconv"
+    "aiida-impuritysupercellconv @ git+https://github.com/mikibonacci/aiida-impuritysupercellconv@new_release/cleanup"
 ]
 
 [project.urls]
