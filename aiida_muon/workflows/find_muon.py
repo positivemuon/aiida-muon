@@ -29,7 +29,7 @@ from aiida_muon.utils.clustering import analyze_structures
 from aiida_muon.utils.magnetism import make_collinear_getmag_kind, compute_dipolar_field
 from aiida_muon.utils.hubbard import check_get_hubbard_u_parms, create_hubbard_structure
 
-StructureData = DataFactory("atomistic.structure")
+#StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 IsolatedImpurityWorkChain = WorkflowFactory('impuritysupercellconv')
@@ -67,7 +67,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         spec.input(
             "structure",
-            valid_type=(StructureData, LegacyStructureData, HubbardStructureData),
+            valid_type=(LegacyStructureData, HubbardStructureData),
             required=False,
             help="Input initial structure",
         )
@@ -320,7 +320,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def get_builder_from_protocol(
         cls,
         pw_code,
-        structure: Union[StructureData, LegacyStructureData, HubbardStructureData],
+        structure: Union[LegacyStructureData, HubbardStructureData],
         pp_code: orm.Code = None,
         protocol: str =None,
         overrides: dict = {},
