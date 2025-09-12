@@ -341,6 +341,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         ML_pre_relax: bool = False,
         skip_dft_relax: bool = False,
         supercells_list: list = [],
+        noncollinear: bool = False,
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -367,7 +368,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 
         # the get defaul also changes the structure, if needed (magmoms and hubbardstructuredata as input)
-        _overrides, start_mg_dict, structure, magmom = get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft)
+        _overrides, start_mg_dict, structure, magmom = get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft, noncollinear)
             
         if enforce_defaults:
             overrides = recursive_merge(overrides,_overrides)
@@ -586,6 +587,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.offset = 0 # offset for the supercell index if we find magnetic inequivalent sites.
         
         self.ctx.set_gamma_only = False
+
+        # check if the calculation is non-collinear; in that case, we cannot set Gamma only even if it is 1x1x1.
+        inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        if inputs.base.pw.parameters.get_dict().get('SYSTEM',{}).get('noncolin',False):
+            self.report("Non-collinear calculation detected, setting Gamma only to False.")
+            self.ctx.non_collinear = True
+        else:
+            self.ctx.non_collinear = False
         
         self.ctx.supc_list = [orm.load_node(uuid) for uuid in self.inputs.supercells_list.get_list()] if hasattr(self.inputs,"supercells_list") else []
 
@@ -750,7 +759,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     
         if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
             self.report("We don't need a Gamma point pre-relaxation, Gamma is anyway the only sampled point.")
-            self.ctx.set_gamma_only = True # so we set gamma point only... in the dft runs
+            self.ctx.set_gamma_only = not self.ctx.non_collinear # so we set gamma point only... in the dft runs
             return False
 
         if self.inputs.gamma_pre_relax:
@@ -802,15 +811,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             inputs.base.kpoints = mesh
             gamma_only_suffix = "_gamma"
             self.report("Using gamma point only for the supercell relaxations.")
-            inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            if not self.ctx.non_collinear:
+                inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
             if hasattr(inputs.base.pw.parallelization, "get_dict"):
                 if "npool" in inputs.base.pw.parallelization.get_dict():
                     inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
             
         elif self.ctx.set_gamma_only:
-            # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True
+            # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True if it is not non-collinear.
             self.report("Using gamma point only for the supercell relaxations.")
-            inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            if not self.ctx.non_collinear:
+                inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            else:
+                self.report("Non-collinear calculation detected, not setting GAMMA_ONLY.")
             if hasattr(inputs.base.pw, "parallelization"):
                 if "npool" in inputs.base.pw.parallelization.get_dict():
                     inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
@@ -1262,8 +1275,13 @@ def get_dict_output(outdata):
 
 
 #Creates the default used in the protocols and in the forcing inputs step.
-def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft):
-    
+def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft, noncollinear=False):
+    """
+    Here, the noncollinear is used to not set the nspin parameter in the overrides.
+    FOR NOW: we set the non colin params in the overrides provided by the user. It is a bit involved, but it is temporary solution!
+    """
+
+
     formula = structure.get_formula()
     
     _overrides = {
@@ -1301,7 +1319,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
     if charge_supercell:
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
         
-    if magmom:
+    if magmom and not noncollinear:
         rst_mg = make_collinear_getmag_kind(
             structure, magmom,
         )
@@ -1321,7 +1339,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
             structure = create_hubbard_structure(new_structure, old_structure)
         else:
             structure = new_structure
-            
+        
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["nspin"]= 2
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["starting_magnetization"] = start_mg_dict.get_dict()
     else:
