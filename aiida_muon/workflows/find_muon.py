@@ -32,6 +32,7 @@ from aiida_muon.utils.hubbard import check_get_hubbard_u_parms, create_hubbard_s
 StructureData = DataFactory("atomistic.structure")
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
+PwRelaxWorkChain = WorkflowFactory('restart.qe_relax') # so we use the additional handlers.
 IsolatedImpurityWorkChain = WorkflowFactory('impuritysupercellconv')
 
 def IsolatedImpurityWorkChain_override_validator(inputs,ctx=None):
@@ -1286,7 +1287,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
     
     _overrides = {
            "base": {
-                #"pseudo_family": pseudo_family,
+                "pseudo_family": pseudo_family,
                 "kpoints_distance": kpoints_distance,
                 "pw": {
                     "parameters": {
@@ -1312,7 +1313,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
                 },
                 },
             },
-            #"base_final_scf": {"pseudo_family": pseudo_family,},
+            "base_final_scf": {"pseudo_family": pseudo_family,},
             "clean_workdir": orm.Bool(True),
         }
 
