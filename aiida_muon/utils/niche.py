@@ -10,7 +10,6 @@ from pymatgen.core import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.util.coord import pbc_shortest_vectors
 
-
 class Niche:
     @staticmethod
     def find_equivalent_positions(frac_coords, host_lattice, atol=1e-3):
@@ -271,10 +270,6 @@ class Niche:
 
         # find equivalent positions among grid points
         good = self.find_equivalent_positions(pos, st, atol=1e-3)
-        '''
-        Miki Bonacci: the good==np... correspondence may be optimized 
-        with np.masked arrays 
-        '''
         pos = pos[good == np.arange(len(pos))]
 
         # Add positions to original structure
