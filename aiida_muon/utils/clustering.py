@@ -10,6 +10,8 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry import analyzer
 from pymatgen.util.coord import pbc_shortest_vectors
 
+from aiida_muon.workflows.utils import get_struct_wt_distortions
+
 def load_workchain_data(data):
     """load and extract relaxed structures for analysis"""
     idx_list = []
