@@ -348,7 +348,7 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
         for i, nwp in enumerate(new_pos):
             for j, d in enumerate(rlxd_results):
                 if nwp[0] == d["idx"]:
-                    init_supc2 = init_supc.copy()
+                    init_supc2 = init_supc.get_pymatgen_structure().copy()
                     nw_st = get_struct_wt_distortions(
                         init_supc2,
                         Structure.from_dict(d["rlxd_struct"]),
