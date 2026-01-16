@@ -40,13 +40,14 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
 
     # remove initial muon position from prist_stc
     # prist_stc.pop()
-    prist_stc.remove_sites([prist_stc.atomic_numbers.index(1)])
+    if 1 in prist_stc.atomic_numbers:
+        prist_stc.remove_sites([prist_stc.atomic_numbers.index(1)])
 
     assert len(rlxd_stc.frac_coords) == len(prist_stc.frac_coords)
 
     # get the symmetry operations that can transform mupos_rlx to n_mupos
     symm_op = []
-    for i, op in enumerate(ops):
+    for i, op in enumerate(opg):
         newp = op.operate(mupos_rlx) % 1
         if np.all(np.abs(newp - n_mupos) < tol):
             symm_op.append(i)
@@ -71,14 +72,18 @@ def get_struct_wt_distortions(prist_stc, rlxd_stc, n_mupos, ipt_st):
             "Check symm op in get_struct_wt_distortions func, this should never happen"
         )
 
-    nw_stc.append(
-        species="H",
-        coords=n_mupos,
-        coords_are_cartesian=False,
-        validate_proximity=True,
-        properties={"kind_name": "H"},
-    )
-
+    try:
+        nw_stc.append(
+            species="H",
+            coords=n_mupos,
+            coords_are_cartesian=False,
+            validate_proximity=True,
+            properties={"kind_name": "H"},
+        )
+    except ValueError as e:
+        print(e)
+        return None
+    
     return nw_stc
 
 def read_wrkc_output(outdata):
