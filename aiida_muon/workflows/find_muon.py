@@ -343,6 +343,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         skip_dft_relax: bool = False,
         supercells_list: list = [],
         noncollinear: bool = False,
+        monitor_entry_point_list: list = [],
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -370,7 +371,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         # the get defaul also changes the structure, if needed (magmoms and hubbardstructuredata as input)
         _overrides, start_mg_dict, structure, magmom = get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft, noncollinear)
-            
+        
         if enforce_defaults:
             overrides = recursive_merge(overrides,_overrides)
         
@@ -405,6 +406,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         #builder_impuritysupercellconv.pop('structure', None)
         
+        overrides["base"]["pw"].pop('pseudos', None)
+
         #### PwBaseWorkChain for final scf mu-origin
         builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
                 pw_code,
@@ -492,6 +495,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if len(supercells_list)>0:
             builder.supercells_list = orm.List(list=supercells_list)
         
+        try:
+            from aiida_monitor.monitor import monitor
+            if 'aiida_monitor.default_monitor' not in monitor_entry_point_list:
+                monitor_entry_point_list.append('aiida_monitor.default_monitor')
+        except:
+            pass
+        
+        if monitor_entry_point_list:
+            builder.relax.base.pw.monitors = {f'monitor_{i}': orm.Dict({'entry_point': monitor_entry_point_list[i]}) for i in range(len(monitor_entry_point_list))}
+
         return builder
     
     
