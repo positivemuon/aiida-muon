@@ -25,11 +25,15 @@ from aiida_muon.utils.clustering import analyze_structures
 from aiida_muon.utils.magnetism import make_collinear_getmag_kind, compute_dipolar_field
 from aiida_muon.utils.hubbard import check_get_hubbard_u_parms, create_hubbard_structure
 
+from aiida_pythonjob import PythonJob
+
 try:
     StructureData = DataFactory("atomistic.structure")
     HAS_ATOMISTIC = True
+    valid_types = (StructureData, LegacyStructureData, HubbardStructureData)
 except Exception:
     HAS_ATOMISTIC = False
+    valid_types = (LegacyStructureData, HubbardStructureData)
 
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
@@ -67,9 +71,18 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """Specify inputs and outputs."""
         super().define(spec)
 
+        spec.expose_inputs(
+            PythonJob, 
+            namespace='pythonjob',
+            namespace_options={
+                'required': False, 
+                'populate_defaults': False,
+                'help': 'Inputs for MLIPs calculations.',
+            },
+        )
         spec.input(
             "structure",
-            valid_type=(StructureData, LegacyStructureData, HubbardStructureData),
+            valid_type=valid_types,
             required=False,
             help="Input initial structure",
         )
@@ -168,7 +181,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             help="To run ML pre-relaxation or not",
         )
         spec.input(
-            "skip_dft_relax",
+            "full_dft_relax",
             valid_type=orm.Bool,
             default=lambda: orm.Bool(False),
             help="To skip DFT relaxation or not",
@@ -180,11 +193,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             help="List of supercells to be used for the relaxation",
         )
         spec.input(
-            "reanalyze_after_relaxations",
+            "pre_clustering",
             valid_type=orm.Bool,
             default=lambda: orm.Bool(False),
             required=False,
-            help="Whether to analyze and recompute structures after each relaxation step",
+            help="Whether to analyze and recompute structures after each pre-relaxation step. For full relax, it is always reanalyzed.",
         )
 
         spec.expose_inputs(
@@ -259,11 +272,25 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.get_initial_muon_sites,
                 cls.get_initial_supercell_structures,
             ),
+            if_(cls.should_run_mlip_relaxation)(
+                cls.compute_supercell_structures,
+                cls.collect_relaxed_structures,
+                cls.run_cluster_analysis,
+            ),
             if_(cls.should_run_gamma_relaxations)(
-                cls.run_relaxation_cycle,
+                cls.compute_supercell_structures,
+                cls.collect_relaxed_structures,
+                cls.run_cluster_analysis,
             ),
             if_(cls.should_run_full_relaxations)(
-                cls.run_relaxation_cycle,
+                cls.compute_supercell_structures,
+                cls.collect_relaxed_structures,
+                cls.run_cluster_analysis,
+            ),
+            if_(cls.new_struct_after_analyze)(
+                cls.compute_supercell_structures,
+                cls.collect_relaxed_structures,
+                cls.collect_all_results,
             ),
             if_(cls.structure_is_magnetic)(
                 if_(cls.spin_polarized_dft)(
@@ -321,8 +348,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         spec.output(
             "unique_sites_dipolar", valid_type=orm.List, required=False
             )  # return only when magnetic
-        
-        
+
     @classmethod
     def get_builder_from_protocol(
         cls,
@@ -347,11 +373,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         pseudo_family: str ="SSSP/1.3/PBE/efficiency",
         gamma_pre_relax: bool = False,
         ML_pre_relax: bool = False,
-        skip_dft_relax: bool = False,
+        pythonjob_code: orm.Code = None,
+        callback_calculator: callable = None,
+        full_dft_relax: bool = True,
         supercells_list: list = [],
-        reanalyze_after_relaxations: bool = False,
+        pre_clustering: bool = True,
         noncollinear: bool = False,
         monitor_entry_point_list: list = [],
+        additional_pythonjob_inputs: dict = {},
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -502,11 +531,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 
         builder.gamma_pre_relax = orm.Bool(gamma_pre_relax)
         builder.ML_pre_relax = orm.Bool(ML_pre_relax)
-        builder.skip_dft_relax = orm.Bool(skip_dft_relax)
-        builder.reanalyze_after_relaxations = orm.Bool(reanalyze_after_relaxations)
+        builder.full_dft_relax = orm.Bool(full_dft_relax)
+        builder.pre_clustering = orm.Bool(pre_clustering)
         
         if builder.ML_pre_relax:
-            raise NotImplementedError("Machine learning relaxations not implemented yet.")
+            from aiida_muon.pythonjobs.relax import prepare_pythonjob_inputs
+            pythonjob_inputs = prepare_pythonjob_inputs(
+                structure=structure,
+                pythonjob_code=pythonjob_code,
+                callback_calculator=callback_calculator,
+                **additional_pythonjob_inputs,
+
+            )
+            builder.pythonjob = pythonjob_inputs
         
         if len(supercells_list)>0:
             builder.supercells_list = orm.List(list=supercells_list)
@@ -521,8 +558,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if monitor_entry_point_list:
             builder.relax.base.pw.monitors = {f'monitor_{i}': orm.Dict({'entry_point': monitor_entry_point_list[i]}) for i in range(len(monitor_entry_point_list))}
 
+
         return builder
-    
     
     def pre_check_structure_data_compatibility(self):
         """
@@ -711,9 +748,24 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         return new_supercell_list
 
+    def should_run_mlip_relaxation(self):
+        """Check if we should run MLIP relaxations.
+        """
+        if self.inputs.ML_pre_relax:
+            # Set context for ML relaxations
+            self.ctx.run_type = "ASE"
+            return True
+        
+        return False
+    
     def should_run_gamma_relaxations(self):
         """Check if we should run gamma relaxations.
-        """      
+        """
+
+        if self.inputs.gamma_pre_relax.value == False:
+            self.report("Skipping gamma pre-relaxation as specified in the inputs.")
+            return False
+
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
             
         if not "kpoints_distance" in inputs.base:
@@ -743,7 +795,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def should_run_full_relaxations(self):
         """Check if we should run full relaxations.
         """
-        if self.inputs.skip_dft_relax:
+        if self.inputs.full_dft_relax.value == False:
             self.report("Skipping DFT relaxations as specified in the inputs.")
             return False
         
@@ -752,29 +804,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.enforce_gamma = False
         return True
 
-    def should_reanalyze_after_relaxations(self):
+    def should_pre_clustering(self):
         """Check if we should analyze and recompute after relaxations."""
-        return self.inputs.reanalyze_after_relaxations.value
+        return self.inputs.pre_clustering.value
 
-    def run_relaxation_cycle(self):
-        """Run a complete relaxation cycle: compute, collect, optionally analyze and recompute."""
-        cycle_type = self.ctx.run_type
-        self.report(f"Starting {cycle_type} relaxation cycle")
-        
-        # Compute supercells
-        self.compute_supercell_structures()
-        
-        # Collect results
-        self.collect_relaxed_structures()
-        
+    def run_cluster_analysis(self):
         # Always analyze the relaxed structures if full k-mesh relaxation, and optionally analyze and recompute if specified in the inputs for Gamma only and MLIPs.
-        if self.should_reanalyze_after_relaxations() or self.ctx.run_type=="full":
+        if self.should_pre_clustering() or self.ctx.run_type=="full":
             self.analyze_relaxed_structures()
-            
-            if self.new_struct_after_analyze():
-                self.compute_supercell_structures()
-                self.collect_relaxed_structures()
-                self.collect_all_results()
+        else:
+            self.report("Skipping pre-clustering of structures after pre-relaxation as specified in the inputs.")
     
     def submit_dft_relaxations(self, enforce_gamma=False):
         """Submit the DFT relaxations for each supercell.
@@ -848,6 +887,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         the structure is HubbardStructureData if needed.
         """
 
+        cycle_type = self.ctx.run_type
+        self.report(f"Starting {cycle_type} relaxation cycle")
+
         self.report("Computing muon supercells")
         self.ctx.supc_list = self.generate_supercells_list()
         
@@ -857,14 +899,34 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         elif self.ctx.run_type == "full":
             self.report("Running DFT relaxations")
             self.submit_dft_relaxations(enforce_gamma=False)
-        elif self.ctx.run_type == "ML":
+        elif self.ctx.run_type == "ASE":
             self.report("Running ML relaxations")
-            self.run_machine_learning_relaxations()    
+            self.submit_ase_relaxations()    
         
         return
 
-    def run_machine_learning_relaxations(self):
-        raise NotImplementedError("Machine learning relaxations not implemented yet.")
+    def submit_ase_relaxations(self):
+
+        inputs = AttributeDict(self.exposed_inputs(PythonJob, namespace='pythonjob'))
+        
+        suffix = "_ase"
+
+        for i_index in range(len(self.ctx.supc_list)):
+
+            inputs.function_inputs.atoms = self.ctx.supc_list[i_index]
+            
+            # Set the `CALL` link label and submission
+            inputs.metadata.call_link_label = f'supercell_{i_index:02d}' + suffix
+            future = self.submit(PythonJob, **inputs)
+            # key = f'workchains.sub{i_index}' #nested sub
+            key = f"workchain_{i_index}"
+            self.report(
+                f"Launching PythonJob (PK={future.pk}) for supercell structure {self.ctx.supc_list[i_index].get_formula()} with index {i_index}" \
+                    + suffix
+            )
+            self.to_context(**{key: future})
+        
+        return
     
     def collect_relaxed_structures(self):
         """Retrieve final positions and energy from the relaxed structures.        
@@ -889,7 +951,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             # checking failed calculations and exiting if more than 40% failed
             if not workchain.is_finished_ok:
                 self.report(
-                    f"PwRelaxWorkChain failed with exit status {workchain.exit_status}"
+                    f"Relaxation calculation {i_index} failed with exit status {workchain.exit_status}"
                 )
                 n_notf += 1
                 # if failed calculation is more than 40%, then exit
@@ -898,11 +960,20 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             else:
                 self.ctx.n = i_index+self.ctx.offset
                 uuid = workchain.uuid
-                energy = workchain.outputs.output_parameters.get_dict()["energy"]
-                rlx_structure = (
-                    workchain.outputs.output_structure.get_pymatgen_structure()
-                )
-                new_supercell_list.append(workchain.outputs.output_structure)
+                if isinstance(workchain, PwRelaxWorkChain):
+                    energy = workchain.outputs.output_parameters.get_dict()["energy"]
+                    rlx_structure = (
+                        workchain.outputs.output_structure.get_pymatgen_structure()
+                    )
+                    new_supercell_list.append(workchain.outputs.output_structure)
+                elif 'pythonjob' in workchain.process_type:
+                    energy = workchain.outputs.energy.value
+                    rlx_structure =  (
+                        workchain.outputs.structure.get_pymatgen_structure()
+                    )
+                    new_supercell_list.append(workchain.outputs.structure)
+                else:
+                    raise ValueError(f"Unknown workchain type: {workchain.process_type} for uuid={uuid}.")
 
                 # computed_results.append((pk,rlx_structure,energy))
                 computed_results.append(

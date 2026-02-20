@@ -23,6 +23,16 @@ git clone https://github.com/positivemuon/aiida-muon.git
 cd aiida-muon/
 pip install -e .
 ```
+
+## Important custom installation for now
+
+after the installation, please install 
+
+```
+pip install git+https://github.com/mikibonacci/aiida-pythonjob@fix_serializer
+pip install numpy==2
+```
+
 ## Example
 
 These examples are for Si, Fe and MnO to demonstrate the capabilities of the workchain. For the purpose of quick run "loose" calculation parameters have been chosen for a quick 1 processor run.
