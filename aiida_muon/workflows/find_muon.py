@@ -535,8 +535,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder.pre_clustering = orm.Bool(pre_clustering)
         
         if builder.ML_pre_relax:
-            from aiida_muon.pythonjobs.relax import prepare_pythonjob_inputs
-            pythonjob_inputs = prepare_pythonjob_inputs(
+            from aiida_muon.pythonjobs.relax import prepare_ase_pythonjob_relaxation_inputs
+            pythonjob_inputs = prepare_ase_pythonjob_relaxation_inputs(
                 structure=structure,
                 pythonjob_code=pythonjob_code,
                 callback_calculator=callback_calculator,
