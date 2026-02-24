@@ -18,6 +18,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
     callback_calculator: Callable,
     pythonjob_code: orm.Code,
     pythonjob_metadata = {'options': {'resources': {'num_machines': 1, 'num_mpiprocs_per_machine': 1}, 'max_wallclock_seconds': 1800}},
+    charged_supercell=False,
     fmax=1e-4,
     optimizer='BFGS',
     fix_symmetry=True,
@@ -91,13 +92,14 @@ def prepare_ase_pythonjob_relaxation_inputs(
         'optimizer': optimizer,
         'fix_symmetry': fix_symmetry,
         'fmax': fmax,
+        'charged_supercell': charged_supercell,
     }
     
     if trajectory is not None:
         function_inputs['trajectory'] = trajectory
 
     def optimize_structure(atoms, calculator, fmax=1e-4, optimizer='BFGS', trajectory=None, 
-                      optimizer_kwargs=None, fix_symmetry=False):
+                      optimizer_kwargs=None, fix_symmetry=False, charged_supercell=False):
         """Optimize an ASE Atoms structure using the specified calculator and optimizer.
         
         This function works with any ASE-compatible calculator (MLIPs, EMT, GPAW, etc.)
@@ -148,6 +150,10 @@ def prepare_ase_pythonjob_relaxation_inputs(
         
         # Set the calculator
         atoms.calc = calculator
+
+        if charged_supercell:
+            atoms.info["charge"] = 1
+            atoms.info["spin"] = 0.5
         
         # Apply symmetry constraint if requested
         if fix_symmetry:
@@ -200,7 +206,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
         return result
 
     def relax_function(atoms, fmax=1e-4, optimizer='BFGS', trajectory=None, 
-                   fix_symmetry=False, optimizer_kwargs=None):
+                   fix_symmetry=False, optimizer_kwargs=None, charged_supercell=False):
         """Convenience function for ASE-based relaxation that returns the optimized structure.
         
         This is the main function to be called from aiida-pythonjob for structure relaxations
@@ -210,7 +216,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
         result = optimize_structure(
             atoms, calculator=callback_calculator, fmax=fmax, optimizer=optimizer, 
             trajectory=trajectory, optimizer_kwargs=optimizer_kwargs,
-            fix_symmetry=fix_symmetry
+            fix_symmetry=fix_symmetry, charged_supercell=charged_supercell
         )
         return {
             "structure": result['structure'], 

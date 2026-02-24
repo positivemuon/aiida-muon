@@ -239,14 +239,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             help=" Preferred metadata and scheduler options for pp.x",
         )
 
-        spec.input(
-            "impuritysupercellconv_metadata",
-            valid_type=dict,
-            non_db=True,
-            required=False,
-            help=" Preferred metadata and scheduler options for impuritysupercellconv",
-        )
-
         # activate IsolatedImpurityWorkChain only if sc_matrix input not present.
         spec.expose_inputs(
             IsolatedImpurityWorkChain,
@@ -373,6 +365,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         pseudo_family: str ="SSSP/1.3/PBE/efficiency",
         gamma_pre_relax: bool = False,
         ML_pre_relax: bool = False,
+        ML_supercell_size: bool = False,
         pythonjob_code: orm.Code = None,
         callback_calculator: callable = None,
         full_dft_relax: bool = True,
@@ -429,18 +422,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         
-        #### IsolatedImpurityWorkChain
-        builder_impuritysupercellconv = IsolatedImpurityWorkChain.get_builder_from_protocol(
-                pw_code = pw_code,
-                structure = structure,
-                pseudo_family = pseudo_family,
-                relax_unitcell = relax_unitcell,
-                charge_supercell = charge_supercell, # <== by default it is false.
-                kpoints_distance = kpoints_distance,
-                conv_thr = conv_thr,
-                overrides = overrides.pop("impuritysupercellconv",None),
-                )
-        
         #builder_impuritysupercellconv.pop('structure', None)
         
         overrides["base"]["pw"].pop('pseudos', None)
@@ -478,34 +459,55 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         builder.structure = structure
         builder.pseudo_family = orm.Str(pseudo_family)
-        builder_impuritysupercellconv.pseudo_family = orm.Str(pseudo_family)
         
-        #setting subworkflows inputs
-        #probably, it is better to populate defaults and then pop if not needed, as done later.
-        for k,v in builder_impuritysupercellconv.items():
-            if k == "relax":
-                for k1,v1 in builder_impuritysupercellconv.relax.items():
-                    if k1 == "base_final_scf": continue
-                    setattr(builder.impuritysupercellconv.relax,k1,v1)
+        #### IsolatedImpurityWorkChain
+        if not sc_matrix:
+            if ML_supercell_size:
+                builder_impuritysupercellconv = IsolatedImpurityWorkChain.get_builder_from_protocol(
+                    structure=structure,
+                    pythonjob_code=pythonjob_code,
+                    callback_calculator=callback_calculator,
+                    charged_supercell=charge_supercell,
+                    ML_forces=True,  # Enable MLIP force calculations
+                    **additional_pythonjob_inputs,
+                )
             else:
-                setattr(builder.impuritysupercellconv,k,v)
-        #builder.impuritysupercellconv = builder_impuritysupercellconv  If you use this instead of the above, it will give ValueError.
-        builder.pwscf = builder_pwscf
-        builder.relax = builder_relax
+                builder_impuritysupercellconv = IsolatedImpurityWorkChain.get_builder_from_protocol(
+                    pw_code = pw_code,
+                    structure = structure,
+                    pseudo_family = pseudo_family,
+                    relax_unitcell = relax_unitcell,
+                    charge_supercell = charge_supercell, # <== by default it is false.
+                    kpoints_distance = kpoints_distance,
+                    conv_thr = conv_thr,
+                    overrides = overrides.pop("impuritysupercellconv",None),
+                    )
+                builder_impuritysupercellconv.pseudo_family = orm.Str(pseudo_family)
+                #setting subworkflows inputs
+                #probably, it is better to populate defaults and then pop if not needed, as done later.
+            for k,v in builder_impuritysupercellconv.items():
+                if k in ["pwscf","relax"] and ML_supercell_size: continue
+                if k == "relax":
+                    for k1,v1 in builder_impuritysupercellconv.relax.items():
+                        if k1 == "base_final_scf": continue
+                        setattr(builder.impuritysupercellconv.relax,k1,v1)
+                else:
+                    try:
+                        setattr(builder.impuritysupercellconv,k,v)
+                    except:
+                        raise ValueError(f"Error setting builder for IsolatedImpurityWorkChain: key {k} not found in the builder.")
+            builder.impuritysupercellconv.pop('structure', None)
+        else:
+            builder.sc_matrix=orm.List(sc_matrix)
         
-        #if not relax_unitcell: builder.impuritysupercellconv.pop('relax')
-        builder.impuritysupercellconv.pop('structure')
+        builder.pwscf = builder_pwscf
+        builder.relax = builder_relax        
         
         # If magmoms are defined, we need to set the spin_pol_dft to True
         if start_mg_dict: 
             if isinstance(magmom, list):
                 magmom = orm.List(magmom)
             builder.magmom = magmom
-        
-        # If sc_matrix, we do not need to run the IsolatedImpurityWorkChain
-        if sc_matrix: 
-            builder.sc_matrix=orm.List(sc_matrix)
-            builder.pop('impuritysupercellconv')
 
         # Validate that niche_atom is a valid element
         try:
@@ -524,7 +526,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if pp_code: builder.pp_code = pp_code
         
         # Checking for additional metadata
-        for i in ["pp_metadata","impuritysupercellconv_metadata","qe_settings"]:
+        for i in ["pp_metadata","qe_settings"]:
             # I don't like this.
             if i in overrides.keys():
                 builder[i] = overrides[i] 
@@ -540,6 +542,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 structure=structure,
                 pythonjob_code=pythonjob_code,
                 callback_calculator=callback_calculator,
+                charged_supercell=charge_supercell,
                 **additional_pythonjob_inputs,
 
             )
@@ -557,7 +560,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         if monitor_entry_point_list:
             builder.relax.base.pw.monitors = {f'monitor_{i}': orm.Dict({'entry_point': monitor_entry_point_list[i]}) for i in range(len(monitor_entry_point_list))}
-
 
         return builder
     
@@ -597,10 +599,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # We ensure we use a kpoints_distance, if not present in the inputs, we use the FindMuonWorkChain one.
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
-        
-        # specific metadata for the IsolatedImpurityWorkChain, directly exposed in this workflow for user friendliness.
-        if hasattr(self.inputs,"impuritysupercellconv_metadata"):
-            inputs.pwscf.pw.metadata = self.inputs.impuritysupercellconv_metadata
 
         # Specific name and submittions
         inputs.metadata.call_link_label = f'IsolatedImpurityWorkChain'
@@ -842,7 +840,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             self.report("Using gamma point only for the supercell relaxations.")
             if not self.ctx.non_collinear:
                 inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
-            if hasattr(inputs.base.pw.parallelization, "get_dict"):
+            if hasattr(inputs.base.pw, "parallelization"):
                 if "npool" in inputs.base.pw.parallelization.get_dict():
                     inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
             
