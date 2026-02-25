@@ -10,25 +10,25 @@ relax.py / forces.py) so that the function can be pickled with
 
 Data transfer strategy
 ----------------------
-All trajectory data is passed as Python objects that get pickled by
-aiida-pythonjob:
+Trajectory data is passed as an AiiDA ``TrajectoryData`` node, **not** as a
+``PickledData`` blob.  This gives a proper, queryable DB record:
 
-* **Input** ``dft_atoms_list``  — list of ASE ``Atoms`` that already carry
-  DFT results in ``atoms.calc.results`` (populated from QE outputs upstream).
-* **Output** ``selected_atoms`` — list of ASE ``Atoms`` (subset, same format).
-
-These pickled lists flow as ``PickledData`` nodes through AiiDA provenance and
-can be forwarded directly as inputs to downstream pythonjobs (e.g.
-``FineTuningWorkChain``) without any filesystem intermediate.
+* **Input** ``dft_trajectory`` — ``TrajectoryData`` node built with
+  :func:`aiida_muon.utils.trajectory.atoms_list_to_trajectory_data`.
+  Positions, cells, energies and forces are stored as plain numpy arrays.
+* **Output** ``selected_atoms`` — ``PickledData`` wrapping a list of ASE ``Atoms``
+  (energy in ``atoms.info['energy']``, forces in ``atoms.arrays['forces']``,
+  calculator stripped).  Use ``.value`` to unpack, or convert to
+  ``TrajectoryData`` with :func:`aiida_muon.utils.trajectory.atoms_list_to_trajectory_data`.
 """
 
-from typing import Callable, List
-from ase import Atoms
+from typing import Callable
 from aiida import orm
+from aiida.orm import TrajectoryData
 
 
 def prepare_score_frames_pythonjob_inputs(
-    dft_atoms_list: list,
+    dft_trajectory: TrajectoryData,
     callback_calculator: Callable,
     pythonjob_code: orm.AbstractCode,
     num_frames: int = 5,
@@ -44,10 +44,10 @@ def prepare_score_frames_pythonjob_inputs(
 
     Parameters
     ----------
-    dft_atoms_list : list of ASE Atoms
-        The DFT trajectory frames.  Each ``Atoms`` must have its DFT results
-        stored under ``atoms.calc.results`` as a dict with at least keys
-        ``'energy'`` (float, eV) and ``'forces'`` (array, eV/Å).
+    dft_trajectory : aiida.orm.TrajectoryData
+        The DFT trajectory stored as an AiiDA ``TrajectoryData`` node.  Must
+        contain ``'energies'`` (eV) and ``'forces'`` (eV/Å) custom arrays as
+        produced by :func:`aiida_muon.utils.trajectory.atoms_list_to_trajectory_data`.
     callback_calculator : callable or ASE Calculator
         The MLIP to evaluate on the trajectory.  Can be a callable (0-arg
         factory) or a live calculator instance.
@@ -76,14 +76,17 @@ def prepare_score_frames_pythonjob_inputs(
 
     Outputs of the submitted job
     ----------------------------
-    selected_atoms : list of ASE Atoms
-        The selected training frames (DFT results embedded in
-        ``atoms.info['energy']`` and ``atoms.arrays['forces']``; calculator
-        stripped for pickling).
+    selected_atoms : PickledData (list of ASE Atoms)
+        The selected training frames.  Energy is stored in
+        ``atoms.info['energy']`` (eV) and forces in ``atoms.arrays['forces']``
+        (eV/Å); the calculator is stripped so the list is compact and
+        picklable.  Use ``.value`` to unpack, or convert to a proper
+        ``TrajectoryData`` with
+        :func:`aiida_muon.utils.trajectory.atoms_list_to_trajectory_data`.
     selected_indices : list of int
         Indices of selected frames in the original trajectory.
     reliability : dict
-        Model reliability summary from ``ScoreCalculator.model_reliability()``.
+        Model reliability summary (mean/max score, force RMSE, …).
     score_values : list of float
         Per-frame composite score for reference / logging.
     """
@@ -99,7 +102,7 @@ def prepare_score_frames_pythonjob_inputs(
         }
 
     function_inputs = {
-        'dft_atoms_list': dft_atoms_list,
+        'dft_trajectory': dft_trajectory,   # proper AiiDA TrajectoryData node
         'num_frames':     num_frames,
         'w_E':            w_E,
         'w_F':            w_F,
@@ -110,7 +113,7 @@ def prepare_score_frames_pythonjob_inputs(
     # ── Inner function (everything inlined so it can be pickled by value) ────
 
     def score_and_select_frames(
-        dft_atoms_list,
+        dft_trajectory,
         num_frames,
         w_E,
         w_F,
@@ -118,8 +121,8 @@ def prepare_score_frames_pythonjob_inputs(
         energy_shift,
     ):
         """
-        Score a DFT trajectory with the MLIP and return the most informative
-        frames for fine tuning.
+        Score a DFT trajectory (TrajectoryData) with the MLIP and return
+        the most informative frames as a new TrajectoryData node.
 
         The entire ScoreCalculator logic is reproduced here so that the
         function is self-contained and can be pickled with
@@ -128,6 +131,11 @@ def prepare_score_frames_pythonjob_inputs(
         import copy
         import numpy as np
         from scipy.signal import find_peaks
+
+        # aiida-pythonjob has already called trajectory_data_to_atoms_list() on
+        # the TrajectoryData input (via the custom deserializer), so dft_trajectory
+        # here is already a plain list of ASE Atoms with SinglePointCalculator.
+        dft_atoms_list = dft_trajectory
 
         # ── 1. Extract DFT energies, forces, positions ────────────────────────
         def _extract_dft(traj):
@@ -231,15 +239,17 @@ def prepare_score_frames_pythonjob_inputs(
 
         selected_indices = [int(i) for i in top]
 
-        # ── 5. Build output Atoms (DFT results embedded, calculator stripped) ─
-        selected_atoms = []
+        # ── 5. Build output: stripped Atoms list (PickledData-safe) ──────────
+        # Return a plain Python list so aiida-pythonjob wraps it as PickledData.
+        # PickledData *outputs* are fine (no JSON validation); the caller can
+        # convert to TrajectoryData if needed via atoms_list_to_trajectory_data.
+        selected_atoms_out = []
         for idx in selected_indices:
-            atoms = copy.deepcopy(dft_atoms_list[idx])
-            atoms.info['energy'] = float(dft_e[idx])
-            # ensure forces array is on the atoms so ASE's extxyz writer can use it
-            atoms.arrays['forces'] = np.array(dft_f[idx])
-            atoms.calc = None   # strip calculator → picklable
-            selected_atoms.append(atoms)
+            at = copy.deepcopy(dft_atoms_list[idx])
+            at.info['energy']   = float(dft_e[idx])
+            at.arrays['forces'] = np.array(dft_f[idx])
+            at.calc = None   # strip calculator so pickle is small and clean
+            selected_atoms_out.append(at)
 
         # ── 6. Reliability summary ────────────────────────────────────────────
         reliability = {
@@ -254,22 +264,32 @@ def prepare_score_frames_pythonjob_inputs(
         }
 
         return {
-            'selected_atoms':   selected_atoms,
+            'selected_atoms':   selected_atoms_out,  # list[ASE Atoms] → PickledData
             'selected_indices': selected_indices,
             'score_values':     score.tolist(),
             'reliability':      reliability,
         }
 
     # ── Assemble pythonjob inputs ─────────────────────────────────────────────
+    # Custom deserializer so aiida-pythonjob can unpack TrajectoryData into
+    # a list of ASE Atoms before calling the remote function.
+    # The key must match the fully-qualified class path that aiida-pythonjob
+    # builds as: f"{data_type.__module__}.{data_type.__name__}"
+    _deserializers = {
+        'aiida.orm.nodes.data.array.trajectory.TrajectoryData':
+            'aiida_muon.utils.trajectory.trajectory_data_to_atoms_list',
+    }
+
     pythonjob_inputs = prepare_pythonjob_inputs(
         function=score_and_select_frames,
         function_inputs=function_inputs,
         outputs_spec=spec.namespace(
-            selected_atoms=Any,
+            selected_atoms=Any,     # list[ASE Atoms] → PickledData (output, safe)
             selected_indices=Any,
             score_values=Any,
             reliability=Any,
         ),
+        deserializers=_deserializers,
         register_pickle_by_value=True,
         code=pythonjob_code,
         metadata=pythonjob_metadata,

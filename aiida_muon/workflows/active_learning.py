@@ -40,6 +40,7 @@ PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 
 from aiida_muon.workflows.finetuning import FineTuningWorkChain
 from aiida_muon.pythonjobs.score_frames import prepare_score_frames_pythonjob_inputs
+from aiida_muon.utils.trajectory import atoms_list_to_trajectory_data
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helper calcfunction: write ASE-readable .xyz training file from DFT outputs
@@ -705,8 +706,11 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
             else None
         )
 
+        # Convert ASE Atoms list → TrajectoryData (proper AiiDA node, no pickle)
+        dft_trajectory = atoms_list_to_trajectory_data(dft_atoms_list)
+
         pythonjob_inputs = prepare_score_frames_pythonjob_inputs(
-            dft_atoms_list=dft_atoms_list,
+            dft_trajectory=dft_trajectory,
             callback_calculator=self.inputs.score_callback_calculator,
             pythonjob_code=self.inputs.pythonjob_code,
             num_frames=self.inputs.score_num_frames.value,
@@ -783,9 +787,10 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
         inputs.pythonjob_code   = self.inputs.pythonjob_code
 
         if self.ctx.selected_atoms is not None:
-            # Pass selected frames directly as a pickled list — no file path needed.
             # ctx.selected_atoms is the PickledData node returned by the score pythonjob.
-            inputs.atoms_list = self.ctx.selected_atoms
+            # .value unpacks it to a plain list of ASE Atoms (energy in atoms.info,
+            # forces in atoms.arrays, calculator stripped).
+            inputs.atoms_list = self.ctx.selected_atoms.value
             self.report(
                 'Using score-filtered frames (atoms_list) as training data.'
             )

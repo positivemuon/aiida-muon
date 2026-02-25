@@ -151,7 +151,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
         # Set the calculator
         atoms.calc = calculator
 
-        if charged_supercell:
+        if charged_supercell: # but still not working properly...
             atoms.info["charge"] = 1
             atoms.info["spin"] = 0.5
         
@@ -235,7 +235,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
         # deserializers={
         #     "aiida.orm.nodes.data.structure.StructureData": "aiida_pythonjob.data.deserializer.structure_data_to_atoms",
         # },
-        # override the default `AtomsData`
+        # override the default `AtomsData`, which is the default serializer for Atoms. The above commented deserializer is not needed because the StructureData is, by default, deserialized to Atoms by aiida-pythonjob.
         serializers={
             "ase.atoms.Atoms": "aiida_pythonjob.data.serializer.atoms_to_structure_data"
         },

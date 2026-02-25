@@ -43,6 +43,8 @@ Typical usage
     print(f"Mean score: {reliability['mean_score']:.4f},  "
           f"Max score: {reliability['max_score']:.4f},  "
           f"Reliable: {reliability['reliable']}")
+
+TODO: the pythonjob is actually in the score_frames.py.
 """
 
 import copy
@@ -260,7 +262,7 @@ class ScoreCalculator:
             self.minima_deltaR_rmse = np.array([0])
 
     def remove_similar(self, frames: np.ndarray, thr: float = 0.01) -> np.ndarray:
-        """
+        '''
         Remove near-duplicate frames based on structural RMSE.
 
         When two frames are closer than *thr* Å (RMSE of atomic positions),
@@ -278,7 +280,8 @@ class ScoreCalculator:
         -------
         np.ndarray
             Filtered frame indices.
-        """
+        '''
+
         frames = np.array(frames)
         to_keep = np.ones(len(frames), dtype=bool)
 
