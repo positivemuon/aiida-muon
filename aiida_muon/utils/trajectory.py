@@ -27,6 +27,31 @@ __all__ = ['atoms_list_to_trajectory_data', 'trajectory_data_to_atoms_list']
 
 import numpy as np
 
+def trajectory_dict_to_trajectory_data(traj_dict):
+    """
+    Convert a trajectory dictionary (e.g. as returned by the relax pythonjob)
+    to a TrajectoryData node.
+
+    The input dict should have the same format as the 'trajectory' entry in the relax pythonjob result, i.e. a dict with lists of positions, energies, forces for each frame.
+    """
+
+
+    from aiida.orm import TrajectoryData
+
+    # Build a TrajectoryData node using the data in traj_dict
+    traj = TrajectoryData()
+    traj.set_trajectory(
+        stepids   = np.arange(len(traj_dict['energies']), dtype=int),
+        cells     = np.array(traj_dict['cells']),
+        symbols   = traj_dict['symbols'],
+        positions = np.array(traj_dict['positions']),
+    )
+    traj.set_array('energies', np.array(traj_dict['energies']))
+    traj.set_array('forces', np.array(traj_dict['forces']))
+    if 'stresses' in traj_dict:
+        traj.set_array('stresses', np.array(traj_dict['stresses']))
+
+    return traj
 
 def atoms_list_to_trajectory_data(atoms_list, store_stresses: bool = True):
     """
@@ -56,11 +81,15 @@ def atoms_list_to_trajectory_data(atoms_list, store_stresses: bool = True):
     ValueError
         If any frame is missing energy or forces in its calculator results.
     """
-    from aiida.orm import TrajectoryData
+    from aiida.orm import TrajectoryData, List
+    from ase.atoms import Atoms
 
     n_steps = len(atoms_list)
     if n_steps == 0:
         raise ValueError('atoms_list is empty')
+
+    if False in [isinstance(atoms, Atoms) for atoms in atoms_list]:
+        raise ValueError('All items in atoms_list must be ASE Atoms objects')
 
     # --- validate ----------------------------------------------------------
     for i, atoms in enumerate(atoms_list):

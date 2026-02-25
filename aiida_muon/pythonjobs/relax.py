@@ -23,7 +23,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
     optimizer='BFGS',
     fix_symmetry=True,
     pythonjob_inputs=None,
-    trajectory=None,
+    trajectory="trajectory.traj",
     custom_relax_function:Callable=None
 ):
     """Prepare inputs for ASE-based structure relaxation using aiida-pythonjob.
@@ -98,7 +98,24 @@ def prepare_ase_pythonjob_relaxation_inputs(
     if trajectory is not None:
         function_inputs['trajectory'] = trajectory
 
-    def optimize_structure(atoms, calculator, fmax=1e-4, optimizer='BFGS', trajectory=None, 
+    class TrajectoryDataSpec(dict):
+        """Specification for the TrajectoryData output of the relaxation function.
+
+        NOTE: it is currently not used. we just return the trajectory as a dict.
+        
+        The TrajectoryData will contain the following arrays:
+        
+        - ``positions`` — 3-D float array, shape ``(n_steps, n_atoms, 3)``, in Å.
+        - ``energies`` — 1-D float array, shape ``(n_steps,)``, in eV.
+        - ``forces`` — 3-D float array, shape ``(n_steps, n_atoms, 3)``, in eV/Å.
+        - ``stresses`` — 2-D float array, shape ``(n_steps, 6)``, Voigt order, in eV/Å³ (optional; only stored when
+        """
+
+        def __init__(self, iterable):
+            super().__init__(iterable)
+
+
+    def optimize_structure(atoms, calculator, fmax=1e-4, optimizer='BFGS', trajectory="trajectory.traj",
                       optimizer_kwargs=None, fix_symmetry=False, charged_supercell=False):
         """Optimize an ASE Atoms structure using the specified calculator and optimizer.
         
@@ -138,6 +155,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
         from ase.optimize.bfgslinesearch import BFGSLineSearch
         from ase.constraints import FixSymmetry
         from ase import units
+        from ase.io.trajectory import Trajectory
 
         
         # QE forces are in atomic units (Ry/bohr), convert to eV/Å
@@ -195,17 +213,46 @@ def prepare_ase_pythonjob_relaxation_inputs(
         # Remove calculator from atoms to allow pickling (some calculators aren't picklable)
         atoms.calc = None
         
+        # Read trajectory frames into a plain list and close the file immediately.
+        # Returning a Trajectory object would fail because it holds an open
+        # _io.BufferedReader file handle that cloudpickle cannot serialise.
+        # We reattach energies/forces via SinglePointCalculator so the frames
+        # carry full DFT/MLIP results while remaining picklable.
+        from ase.calculators.singlepoint import SinglePointCalculator as SPC
+        traj_atoms = {
+            "positions": [],
+            "cells": [],
+            "energies": [],
+            "forces": [],
+            "symbols": atoms.get_chemical_symbols(),
+            "stresses": [],
+        }
+        if trajectory:
+            _traj = Trajectory(trajectory)
+            for _at in _traj:
+                traj_atoms["positions"].append(_at.get_positions())
+                traj_atoms["cells"].append(_at.get_cell())
+                traj_atoms["energies"].append(_at.get_potential_energy())
+                traj_atoms["forces"].append(_at.get_forces())
+                try:
+                    traj_atoms["stresses"].append(_at.get_stress(voigt=False))
+                except Exception:
+                    # traj_atoms["stresses"].append(None)
+                    pass
+            _traj.close()
+        
         # Collect results
         result = {
             'structure': atoms,
             'energy': final_energy,
             'forces': final_forces,
             'nsteps': nsteps,
+            'trajectory': traj_atoms   # dict with lists of positions, energies, forces for each frame
         }
         
         return result
 
-    def relax_function(atoms, fmax=1e-4, optimizer='BFGS', trajectory=None, 
+    def relax_function(atoms, fmax=1e-4, optimizer='BFGS', trajectory="trajectory.traj", 
                    fix_symmetry=False, optimizer_kwargs=None, charged_supercell=False):
         """Convenience function for ASE-based relaxation that returns the optimized structure.
         
@@ -218,11 +265,13 @@ def prepare_ase_pythonjob_relaxation_inputs(
             trajectory=trajectory, optimizer_kwargs=optimizer_kwargs,
             fix_symmetry=fix_symmetry, charged_supercell=charged_supercell
         )
+
         return {
             "structure": result['structure'], 
             "energy": result['energy'], 
             "forces": result['forces'], 
-            "nsteps": result['nsteps']
+            "nsteps": result['nsteps'],
+            "trajectory": result['trajectory']
         }
 
     
@@ -230,14 +279,14 @@ def prepare_ase_pythonjob_relaxation_inputs(
     pythonjob_inputs = prepare_pythonjob_inputs(
         function=relax_function,
         function_inputs=function_inputs,
-        outputs_spec=spec.namespace(structure=orm.StructureData, energy=Any, forces=Any, nsteps=Any),
+        outputs_spec=spec.namespace(structure=orm.StructureData, energy=Any, forces=Any, nsteps=Any, trajectory=Any),
         register_pickle_by_value=True,
         # deserializers={
         #     "aiida.orm.nodes.data.structure.StructureData": "aiida_pythonjob.data.deserializer.structure_data_to_atoms",
         # },
         # override the default `AtomsData`, which is the default serializer for Atoms. The above commented deserializer is not needed because the StructureData is, by default, deserialized to Atoms by aiida-pythonjob.
         serializers={
-            "ase.atoms.Atoms": "aiida_pythonjob.data.serializer.atoms_to_structure_data"
+            "ase.atoms.Atoms": "aiida_pythonjob.data.serializer.atoms_to_structure_data",
         },
         **pythonjob_inputs_dict
     )
