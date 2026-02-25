@@ -53,6 +53,25 @@ def trajectory_dict_to_trajectory_data(traj_dict):
 
     return traj
 
+def trajectory_data_to_trajectory_dict(traj_data):
+    """
+    Convert a TrajectoryData node to a trajectory dictionary (e.g. as returned by the relax pythonjob).
+
+    The output dict has the same format as the 'trajectory' entry in the relax pythonjob result, i.e. a dict with lists of positions, energies, forces for each frame.
+    """
+    traj_dict = {
+        'positions': traj_data.get_array('positions').tolist(),
+        'cells': traj_data.get_array('cells').tolist(),
+        'symbols': list(traj_data.symbols),
+        'energies': traj_data.get_array('energies').tolist(),
+        'forces': traj_data.get_array('forces').tolist(),
+    }
+    if 'stresses' in traj_data.get_arraynames():
+        traj_dict['stresses'] = traj_data.get_array('stresses').tolist()
+
+    return traj_dict
+
+
 def atoms_list_to_trajectory_data(atoms_list, store_stresses: bool = True):
     """
     Convert a list of ASE ``Atoms`` objects to an AiiDA ``TrajectoryData``.
@@ -147,6 +166,51 @@ def atoms_list_to_trajectory_data(atoms_list, store_stresses: bool = True):
 
     return traj
 
+def trajectory_dict_to_atoms_list(traj_dict):
+    """
+    Convert a trajectory dictionary (e.g. as returned by the relax pythonjob)
+    to a list of ASE Atoms objects with SinglePointCalculator attached.
+
+    The input dict should have the same format as the 'trajectory' entry in the relax pythonjob result, i.e. a dict with lists of positions, energies, forces for each frame.
+    """
+    from ase import Atoms
+    from ase.calculators.singlepoint import SinglePointCalculator
+
+    positions = np.array(traj_dict['positions'])   # (n_steps, n_atoms, 3)
+    cells     = np.array(traj_dict['cells'])       # (n_steps, 3, 3)
+    symbols   = traj_dict['symbols']               # list[str]
+    energies  = np.array(traj_dict['energies'])    # (n_steps,)
+    forces    = np.array(traj_dict['forces'])      # (n_steps, n_atoms, 3)
+
+    try:
+        stresses = np.array(traj_dict['stresses']) # (n_steps, 6)
+    except KeyError:
+        stresses = None
+
+    try:
+        pbc = np.array(traj_dict['pbc'], dtype=bool) # (3,) bool
+    except KeyError:
+        pbc = True
+
+    atoms_list = []
+    for i in range(len(positions)):
+        atoms = Atoms(
+            symbols   = symbols,
+            positions = positions[i],
+            cell      = cells[i],
+            pbc       = pbc,
+        )
+        calc_kwargs = {
+            'energy': float(energies[i]),
+            'forces': forces[i],
+        }
+        if stresses is not None:
+            calc_kwargs['stress'] = stresses[i]
+
+        atoms.calc = SinglePointCalculator(atoms, **calc_kwargs)
+        atoms_list.append(atoms)
+
+    return atoms_list
 
 def trajectory_data_to_atoms_list(traj_data):
     """

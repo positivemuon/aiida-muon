@@ -216,9 +216,7 @@ def prepare_ase_pythonjob_relaxation_inputs(
         # Read trajectory frames into a plain list and close the file immediately.
         # Returning a Trajectory object would fail because it holds an open
         # _io.BufferedReader file handle that cloudpickle cannot serialise.
-        # We reattach energies/forces via SinglePointCalculator so the frames
-        # carry full DFT/MLIP results while remaining picklable.
-        from ase.calculators.singlepoint import SinglePointCalculator as SPC
+
         traj_atoms = {
             "positions": [],
             "cells": [],

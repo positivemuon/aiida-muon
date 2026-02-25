@@ -2,7 +2,8 @@ def prepare_mattersim_finetuning_inputs(
     load_model_path,
     pythonjob_code,
     train_data_path=None,
-    atoms_list=None,
+    trajectory_dict=None,
+    trajectorydata=None,
     save_path="./finetuned_model",
     epochs=100,
     batch_size=4,
@@ -29,12 +30,13 @@ def prepare_mattersim_finetuning_inputs(
     pythonjob_code : orm.Code
         The PythonJob code to use (listed here for clarity; also a positional arg)
     train_data_path : str, optional
-        Path to training data file (.xyz or .pkl).  Either this or ``atoms_list``
+        Path to training data file (.xyz or .pkl).  Either this or ``trajectory``
         must be provided.
-    atoms_list : list of ASE Atoms, optional
-        Training frames passed directly as a pickled list — no filesystem
-        required.  Each ``Atoms`` must carry DFT results in
-        ``atoms.info['energy']`` and ``atoms.arrays['forces']``.
+    trajectory : list of ASE Atoms, optional
+        Training frames passed directly — typically the ``trajectory`` output
+        of a ``relax.py`` PythonJob (``node.outputs.trajectory.value``).
+        Each ``Atoms`` must have a ``SinglePointCalculator`` attached with
+        ``energy`` and ``forces`` in ``atoms.calc.results``.
         Either this or ``train_data_path`` must be provided.
     pythonjob_code : orm.Code
         The PythonJob code to use
@@ -78,16 +80,20 @@ def prepare_mattersim_finetuning_inputs(
             }
         }
     
-    if train_data_path is None and atoms_list is None:
+    if train_data_path is None and trajectory_dict is None and trajectorydata is None:
         raise ValueError(
-            'Either train_data_path or atoms_list must be provided to '
+            'Either train_data_path or trajectory or trajectorydata must be provided to '
             'prepare_mattersim_finetuning_inputs.'
         )
+
+    if trajectorydata is not None:
+        from aiida_muon.utils.trajectory import trajectory_data_to_trajectory_dict
+        trajectory_dict = trajectory_data_to_trajectory_dict(trajectorydata)
 
     # Prepare function inputs
     function_inputs = {
         'train_data_path': train_data_path,
-        'atoms_list':      atoms_list,
+        'trajectory_dict': trajectory_dict,
         'load_model_path': load_model_path,
         'save_path': save_path,
         'epochs': epochs,
@@ -100,11 +106,14 @@ def prepare_mattersim_finetuning_inputs(
         'stress_loss_ratio': stress_loss_ratio,
         'seed': seed,
     }
+
+    if train_data_path is None:
+        function_inputs.pop("train_data_path", None)
+    if trajectory_dict is None:
+        function_inputs.pop("trajectory_dict", None)
     
     # Define the finetuning function (must be defined here to be pickled)
     def finetune_function(
-        train_data_path,
-        atoms_list,
         load_model_path,
         save_path,
         epochs,
@@ -116,13 +125,15 @@ def prepare_mattersim_finetuning_inputs(
         force_loss_ratio,
         stress_loss_ratio,
         seed,
+        train_data_path=None,
+        trajectory_dict=None,    
     ):
         """Wrapper function for MatterSim finetuning.
 
         Accepts training data either as a file path (``train_data_path``) or
-        as a pre-built list of ASE ``Atoms`` objects (``atoms_list``).  The
-        latter avoids any filesystem dependency and allows the frames to be
-        streamed directly from a scoring pythonjob output.
+        as the ``trajectory`` list of ASE ``Atoms`` objects (typically the
+        ``trajectory`` output of a ``relax.py`` PythonJob).  Each frame must
+        have a ``SinglePointCalculator`` attached with energy and forces.
         """
         import os
         import random
@@ -149,23 +160,9 @@ def prepare_mattersim_finetuning_inputs(
         torch.manual_seed(seed)
         
         # ── Load training data ────────────────────────────────────────────────
-        if atoms_list is not None:
-            # Frames arrived already as ASE Atoms; energy/forces are embedded
-            # in atoms.info['energy'] and atoms.arrays['forces'] (set by the
-            # score pythonjob).  Reconstruct a minimal SinglePointCalculator so
-            # that MatterSim's dataloader can call get_potential_energy() etc.
-            from ase.calculators.singlepoint import SinglePointCalculator
-            atoms_train = []
-            for a in atoms_list:
-                energy = float(a.info.get('energy', 0.0))
-                forces_arr = a.arrays.get('forces', np.zeros((len(a), 3)))
-                a.calc = SinglePointCalculator(
-                    a, energy=energy, forces=forces_arr
-                )
-                atoms_train.append(a)
-        elif train_data_path.endswith(".pkl"):
-            with open(train_data_path, "rb") as f:
-                atoms_train = pkl.load(f)
+        if trajectory_dict is not None:
+            from aiida_muon.utils.trajectory import trajectory_dict_to_atoms_list
+            atoms_train = trajectory_dict_to_atoms_list(trajectory_dict)
         else:
             atoms_train = AtomsAdaptor.from_file(filename=train_data_path)
         
