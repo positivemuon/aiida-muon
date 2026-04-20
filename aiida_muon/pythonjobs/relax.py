@@ -226,14 +226,16 @@ def prepare_ase_pythonjob_relaxation_inputs(
             "stresses": [],
         }
         if trajectory:
+            import numpy as _np
             _traj = Trajectory(trajectory)
             for _at in _traj:
-                traj_atoms["positions"].append(_at.get_positions())
-                traj_atoms["cells"].append(_at.get_cell())
-                traj_atoms["energies"].append(_at.get_potential_energy())
-                traj_atoms["forces"].append(_at.get_forces())
+                # Convert to plain Python types so the pickle is numpy-version-independent.
+                traj_atoms["positions"].append(_at.get_positions().tolist())
+                traj_atoms["cells"].append(_np.array(_at.get_cell()).tolist())
+                traj_atoms["energies"].append(float(_at.get_potential_energy()))
+                traj_atoms["forces"].append(_at.get_forces().tolist())
                 try:
-                    traj_atoms["stresses"].append(_at.get_stress(voigt=False))
+                    traj_atoms["stresses"].append(_at.get_stress(voigt=False).tolist())
                 except Exception:
                     # traj_atoms["stresses"].append(None)
                     pass
@@ -265,11 +267,12 @@ def prepare_ase_pythonjob_relaxation_inputs(
         )
 
         return {
-            "structure": result['structure'], 
-            "energy": result['energy'], 
-            "forces": result['forces'], 
-            "nsteps": result['nsteps'],
-            "trajectory": result['trajectory']
+            "structure": result['structure'],
+            # Convert to plain Python types so the pickle is numpy-version-independent.
+            "energy": float(result['energy']),
+            "forces": result['forces'].tolist(),
+            "nsteps": int(result['nsteps']),
+            "trajectory": result['trajectory'],  # already converted above
         }
 
     

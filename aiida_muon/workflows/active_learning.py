@@ -36,7 +36,6 @@ from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 from aiida_pythonjob import PythonJob
 
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
-PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
 
 from aiida_muon.workflows.finetuning import FineTuningWorkChain
 from aiida_muon.pythonjobs.score_frames import prepare_score_frames_pythonjob_inputs
@@ -143,8 +142,6 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
         Each iteration saves to `<save_path>/iter_<N>/`.
     max_iterations
         Maximum number of active-learning iterations (default 1).
-    run_relax (optional, default False)
-        If True, use PwRelaxWorkChain instead of PwBaseWorkChain for DFT.
     pseudo_family
         Pseudo-potential family label (required when structures are given).
     pythonjob_code
@@ -206,29 +203,11 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
 
         # ── DFT options ───────────────────────────────────────────────────────
         spec.input(
-            'run_relax',
-            valid_type=orm.Bool,
-            default=lambda: orm.Bool(False),
-            required=False,
-            help='If True, use PwRelaxWorkChain; otherwise PwBaseWorkChain (singlepoint).',
-        )
-        spec.input(
             'pseudo_family',
             valid_type=orm.Str,
             default=lambda: orm.Str('SSSP/1.3/PBE/efficiency'),
             required=False,
             help='Pseudo-potential family label (needed when structures are provided).',
-        )
-
-        spec.expose_inputs(
-            PwRelaxWorkChain,
-            namespace='relax',
-            exclude=('structure', 'base_final_scf'),
-            namespace_options={
-                'required': False,
-                'populate_defaults': False,
-                'help': 'Inputs for PwRelaxWorkChain (used when run_relax=True).',
-            },
         )
         spec.expose_inputs(
             PwBaseWorkChain,
@@ -358,7 +337,6 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
         test_data_path: str = None,
         save_path: str = './finetuned_model',
         max_iterations: int = 1,
-        run_relax: bool = False,
         pseudo_family: str = 'SSSP/1.3/PBE/efficiency',
         pw_code: orm.AbstractCode = None,
         protocol: str = None,
@@ -399,8 +377,6 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
             Each iteration writes to ``<save_path>/iter_NN/``.
         max_iterations : int
             Maximum number of active-learning iterations (default 1).
-        run_relax : bool
-            If True, use PwRelaxWorkChain for DFT; otherwise PwBaseWorkChain.
         pseudo_family : str
             Pseudo-potential family label (needed when structures are provided).
         pw_code : orm.AbstractCode, optional
@@ -451,7 +427,6 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
         builder.load_model_path = orm.Str(load_model_path)
         builder.save_path       = orm.Str(save_path)
         builder.max_iterations  = orm.Int(max_iterations)
-        builder.run_relax       = orm.Bool(run_relax)
         builder.pseudo_family   = orm.Str(pseudo_family)
 
         if train_data_path is not None:
@@ -476,30 +451,16 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
                     'metadata', {}
                 )['options'] = options
 
-            if run_relax:
-                from aiida_quantumespresso.common.types import RelaxType
-                dft_builder = PwRelaxWorkChain.get_builder_from_protocol(
-                    code=pw_code,
-                    structure=representative,
-                    pseudo_family=pseudo_family,
-                    protocol=protocol,
-                    overrides=overrides,
-                    relax_type=RelaxType.POSITIONS,
-                )
-                dft_builder.pop('structure', None)
-                dft_builder.pop('base_final_scf', None)
-                builder.relax = dft_builder
-            else:
-                dft_builder = PwBaseWorkChain.get_builder_from_protocol(
-                    code=pw_code,
-                    structure=representative,
-                    pseudo_family=pseudo_family,
-                    protocol=protocol,
-                    overrides=overrides.get('base', overrides),
-                )
-                dft_builder['pw'].pop('structure', None)
-                dft_builder.pop('kpoints_distance', None)
-                builder.pwscf = dft_builder
+            dft_builder = PwBaseWorkChain.get_builder_from_protocol(
+                code=pw_code,
+                structure=representative,
+                pseudo_family=pseudo_family,
+                protocol=protocol,
+                overrides=overrides.get('base', overrides),
+            )
+            dft_builder['pw'].pop('structure', None)
+            dft_builder.pop('kpoints_distance', None)
+            builder.pwscf = dft_builder
 
         # ── Finetuning hyper-parameters ───────────────────────────────────────
         builder.finetuning.epochs            = orm.Int(epochs)
@@ -584,25 +545,16 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
         """
         from aiida_muon.workflows.find_muon import get_pseudos  # reuse find_muon helper if available
 
-        do_relax = self.inputs.run_relax.value
 
         for key in self.ctx.structure_keys:
             structure = self.inputs.structures[key]
 
-            if do_relax:
-                inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
-                inputs.structure = structure
-                inputs.base.pw.pseudos = get_pseudos(structure, self.inputs.pseudo_family.value)
-                inputs.metadata.call_link_label = f'dft_{key}'
-                future = self.submit(PwRelaxWorkChain, **inputs)
-                self.report(f'Submitted PwRelaxWorkChain (PK={future.pk}) for structure {key}')
-            else:
-                inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace='pwscf'))
-                inputs.pw.structure = structure
-                inputs.pw.pseudos = get_pseudos(structure, self.inputs.pseudo_family.value)
-                inputs.metadata.call_link_label = f'dft_{key}'
-                future = self.submit(PwBaseWorkChain, **inputs)
-                self.report(f'Submitted PwBaseWorkChain (PK={future.pk}) for structure {key}')
+            inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace='pwscf'))
+            inputs.pw.structure = structure
+            inputs.pw.pseudos = get_pseudos(structure, self.inputs.pseudo_family.value)
+            inputs.metadata.call_link_label = f'dft_{key}'
+            future = self.submit(PwBaseWorkChain, **inputs)
+            self.report(f'Submitted PwBaseWorkChain (PK={future.pk}) for structure {key}')
 
             self.to_context(**{f'dft_{key}': future})
 
@@ -612,7 +564,6 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
         """
         Gather energies and forces from DFT jobs; write train_data.xyz.
         """
-        do_relax = self.inputs.run_relax.value
 
         structures_out = []
         energies_out   = []
@@ -627,17 +578,10 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
                 n_failed += 1
                 continue
 
-            if do_relax:
-                params  = wc.outputs.output_parameters.get_dict()
-                energy  = params['energy']                   # eV
-                struct  = wc.outputs.output_structure
-                # forces from the last ionic step – stored in output_trajectory
-                forces  = wc.outputs.output_trajectory.get_array('forces')[-1].tolist()
-            else:
-                params  = wc.outputs.output_parameters.get_dict()
-                energy  = params['energy']
-                struct  = wc.inputs.pw.structure             # input structure (singlepoint)
-                forces  = wc.outputs.output_parameters.get_dict().get('forces', [])
+            params  = wc.outputs.output_parameters.get_dict()
+            energy  = params['energy']
+            struct  = wc.inputs.pw.structure             # input structure (singlepoint)
+            forces  = wc.outputs.output_parameters.get_dict().get('forces', [])
 
             structures_out.append(struct)
             energies_out.append(energy)
@@ -669,93 +613,11 @@ class ActiveLearningWorkChain(ProtocolMixin, WorkChain):
     # ── Step 3b: score calculation ───────────────────────────────────────────────
 
     def run_score_calculation(self):
-        """
-        Submit a PythonJob that:
-        1. Receives the full DFT trajectory (as a pickled list of ASE Atoms built
-           from ``ctx.dft_structures``, ``ctx.dft_energies``, ``ctx.dft_forces``).
-        2. Evaluates the MLIP (``score_callback_calculator``) on each frame.
-        3. Computes per-frame disagreement scores.
-        4. Returns the most informative subset of frames (pickled list of Atoms).
-
-        All data flows as pickled Python objects through aiida-pythonjob — no
-        intermediate files are written to any shared filesystem.
-        """
-        import numpy as np
-        from ase.calculators.singlepoint import SinglePointCalculator
-
-        self.report('Building DFT Atoms list for score calculation')
-
-        # Reconstruct ASE Atoms with embedded DFT results from the raw lists
-        # stored in ctx by collect_dft_results.
-        dft_atoms_list = []
-        for struct, energy, forces in zip(
-            self.ctx.dft_structures,
-            self.ctx.dft_energies,
-            self.ctx.dft_forces,
-        ):
-            atoms = struct.get_ase()
-            forces_arr = np.array(forces)
-            atoms.calc = SinglePointCalculator(
-                atoms, energy=float(energy), forces=forces_arr
-            )
-            dft_atoms_list.append(atoms)
-
-        energy_shift = (
-            self.inputs.score_energy_shift.value
-            if 'score_energy_shift' in self.inputs
-            else None
-        )
-
-        # Convert ASE Atoms list → TrajectoryData (proper AiiDA node, no pickle)
-        dft_trajectory = atoms_list_to_trajectory_data(dft_atoms_list)
-
-        pythonjob_inputs = prepare_score_frames_pythonjob_inputs(
-            dft_trajectory=dft_trajectory,
-            callback_calculator=self.inputs.score_callback_calculator,
-            pythonjob_code=self.inputs.pythonjob_code,
-            num_frames=self.inputs.score_num_frames.value,
-            w_E=self.inputs.score_w_E.value,
-            w_F=self.inputs.score_w_F.value,
-            similarity_thr=self.inputs.score_similarity_thr.value,
-            energy_shift=energy_shift,
-        )
-
-        future = self.submit(PythonJob, **pythonjob_inputs)
-        self.report(
-            f'Submitted score-calculation PythonJob (PK={future.pk}) '
-            f'on {len(dft_atoms_list)} DFT frames.'
-        )
-        return ToContext(score_job=future)
+        pass
 
     def collect_score_results(self):
-        """
-        Retrieve the selected frames from the score PythonJob and store them
-        in ``ctx.selected_atoms`` for direct forwarding to the finetuning job.
-        """
-        job = self.ctx.score_job
-
-        if not job.is_finished_ok:
-            self.report(
-                f'Score PythonJob failed (status {job.exit_status}). '
-                'Falling back to full DFT trajectory for training.'
-            )
-            # Soft failure: do not abort, just skip the filtering.
-            self.ctx.selected_atoms = None
-            return
-
-        # selected_atoms is a pickled list of ASE Atoms (PickledData node)
-        self.ctx.selected_atoms          = job.outputs.selected_atoms
-        self.ctx.score_selected_indices  = list(job.outputs.selected_indices)
-        reliability                      = dict(job.outputs.reliability)
-        self.ctx.score_reliability       = reliability
-        selected_indices = self.ctx.score_selected_indices
-
-        self.report(
-            f'Score filtering done: selected {len(selected_indices)} frames '
-            f'(indices={selected_indices}). '
-            f'Mean score={reliability.get("mean_score", "n/a"):.4f}, '
-            f'Mean force RMSE={reliability.get("mean_deltaF_rmse", "n/a"):.4f} eV/\u00c5.'
-        )
+        pass
+        
     # ── Loop condition ─────────────────────────────────────────────────────────
 
     def should_iterate(self):

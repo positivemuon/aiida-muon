@@ -23,7 +23,7 @@ All arrays are stored via ``TrajectoryData.set_array``.
 """
 from __future__ import annotations
 
-__all__ = ['atoms_list_to_trajectory_data', 'trajectory_data_to_atoms_list']
+__all__ = ['atoms_list_to_trajectory_data', 'trajectory_data_to_atoms_list', 'atoms_list_to_extxyz']
 
 import numpy as np
 
@@ -46,7 +46,7 @@ def trajectory_dict_to_trajectory_data(traj_dict):
         symbols   = traj_dict['symbols'],
         positions = np.array(traj_dict['positions']),
     )
-    traj.set_array('energies', np.array(traj_dict['energies']))
+    traj.set_array('energy', np.array(traj_dict['energies']))
     traj.set_array('forces', np.array(traj_dict['forces']))
     if 'stresses' in traj_dict:
         traj.set_array('stresses', np.array(traj_dict['stresses']))
@@ -63,7 +63,7 @@ def trajectory_data_to_trajectory_dict(traj_data):
         'positions': traj_data.get_array('positions').tolist(),
         'cells': traj_data.get_array('cells').tolist(),
         'symbols': list(traj_data.symbols),
-        'energies': traj_data.get_array('energies').tolist(),
+        'energies': traj_data.get_array('energy').tolist(),
         'forces': traj_data.get_array('forces').tolist(),
     }
     if 'stresses' in traj_data.get_arraynames():
@@ -156,7 +156,7 @@ def atoms_list_to_trajectory_data(atoms_list, store_stresses: bool = True):
         symbols   = symbols,
         positions = positions,
     )
-    traj.set_array('energies', energies)
+    traj.set_array('energy', energies)
     traj.set_array('forces',   forces)
     if has_stress:
         traj.set_array('stresses', stresses)
@@ -165,6 +165,43 @@ def atoms_list_to_trajectory_data(atoms_list, store_stresses: bool = True):
     traj.set_array('pbc', np.array(atoms_list[0].get_pbc(), dtype=bool))
 
     return traj
+
+def atoms_list_to_extxyz(atoms_list, filepath):
+    """
+    Write a list of ASE ``Atoms`` objects (with DFT results attached) to an
+    extended XYZ file.
+
+    Each ``Atoms`` object must have a ``SinglePointCalculator`` (or equivalent)
+    with at least ``'energy'`` (eV) and ``'forces'`` (eV/Å) in
+    ``atoms.calc.results``.  Stresses are written automatically when present.
+
+    Supports frames with different numbers of atoms (variable composition).
+
+    Parameters
+    ----------
+    atoms_list : list of ase.Atoms
+        Trajectory frames with DFT results attached.
+    filepath : str
+        Destination file path (e.g. ``"/tmp/train.xyz"``).  If the file
+        already exists it is **overwritten**.
+
+    Returns
+    -------
+    str
+        Absolute path of the written file.
+    """
+    import os
+    import ase.io
+
+    if len(atoms_list) == 0:
+        raise ValueError('atoms_list is empty')
+
+    filepath = os.path.abspath(filepath)
+    # Write all frames; ase.io.write with format='extxyz' embeds energy,
+    # forces, stress (and cell, pbc) from the attached calculator automatically.
+    ase.io.write(filepath, atoms_list, format='extxyz')
+    return filepath
+
 
 def trajectory_dict_to_atoms_list(traj_dict):
     """
@@ -237,7 +274,7 @@ def trajectory_data_to_atoms_list(traj_data):
 
     positions = traj_data.get_array('positions')   # (n_steps, n_atoms, 3)
     cells     = traj_data.get_array('cells')       # (n_steps, 3, 3)
-    energies  = traj_data.get_array('energies')    # (n_steps,)
+    energies  = traj_data.get_array('energy')    # (n_steps,)
     forces    = traj_data.get_array('forces')      # (n_steps, n_atoms, 3)
     symbols   = list(traj_data.symbols)            # list[str]
 

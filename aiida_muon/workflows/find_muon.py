@@ -36,8 +36,10 @@ except Exception:
     valid_types = (LegacyStructureData, HubbardStructureData)
 
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
-PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
-PwRelaxWorkChain = WorkflowFactory('restart.qe_relax') # so we use the additional handlers.
+
+from aiida_quantumespresso.workflows.pw.relax import PwRelaxWorkChain as LegacyPwRelaxWorkChain
+from aiida_qe_restart.relax import PoweredPwRelaxWorkChain as PwRelaxWorkChain
+
 IsolatedImpurityWorkChain = WorkflowFactory('impuritysupercellconv')
 
 def IsolatedImpurityWorkChain_override_validator(inputs,ctx=None):
@@ -278,12 +280,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.compute_supercell_structures,
                 cls.collect_relaxed_structures,
                 cls.run_cluster_analysis,
+                if_(cls.new_struct_after_analyze)(   # we do this analysis only for the full mesh case.
+                    cls.compute_supercell_structures,
+                    cls.collect_relaxed_structures,
+                ),
             ),
-            if_(cls.new_struct_after_analyze)(
-                cls.compute_supercell_structures,
-                cls.collect_relaxed_structures,
-                cls.collect_all_results,
-            ),
+            cls.collect_all_results,
             if_(cls.structure_is_magnetic)(
                 if_(cls.spin_polarized_dft)(
                     cls.run_final_scf_mu_origin,
@@ -370,7 +372,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         callback_calculator: callable = None,
         full_dft_relax: bool = True,
         supercells_list: list = [],
-        pre_clustering: bool = True,
+        pre_clustering: bool = False,
         noncollinear: bool = False,
         monitor_entry_point_list: list = [],
         additional_pythonjob_inputs: dict = {},
@@ -808,7 +810,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
     def run_cluster_analysis(self):
         # Always analyze the relaxed structures if full k-mesh relaxation, and optionally analyze and recompute if specified in the inputs for Gamma only and MLIPs.
-        if self.should_pre_clustering() or self.ctx.run_type=="full":
+        if self.should_pre_clustering():
+            self.analyze_relaxed_structures(mode='pre-clustering', d_tol=0.25)
+        elif self.ctx.run_type=="full":
             self.analyze_relaxed_structures()
         else:
             self.report("Skipping pre-clustering of structures after pre-relaxation as specified in the inputs.")
@@ -839,7 +843,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             gamma_only_suffix = "_gamma"
             self.report("Using gamma point only for the supercell relaxations.")
             if not self.ctx.non_collinear:
-                inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+                settings = inputs.base.pw.settings.get_dict() if hasattr(inputs.base.pw, "settings") else {}
+                settings["GAMMA_ONLY"] = True
+                inputs.base.pw.settings = orm.Dict(dict=settings)
             if hasattr(inputs.base.pw, "parallelization"):
                 if "npool" in inputs.base.pw.parallelization.get_dict():
                     inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
@@ -848,7 +854,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True if it is not non-collinear.
             self.report("Using gamma point only for the supercell relaxations.")
             if not self.ctx.non_collinear:
-                inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+                settings = inputs.base.pw.settings.get_dict() if hasattr(inputs.base.pw, "settings") else {}
+                settings["GAMMA_ONLY"] = True
+                inputs.base.pw.settings = orm.Dict(dict=settings)
             else:
                 self.report("Non-collinear calculation detected, not setting GAMMA_ONLY.")
             if hasattr(inputs.base.pw, "parallelization"):
@@ -958,7 +966,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             else:
                 self.ctx.n = i_index+self.ctx.offset
                 uuid = workchain.uuid
-                if isinstance(workchain, PwRelaxWorkChain):
+                if workchain.process_class in [LegacyPwRelaxWorkChain, PwRelaxWorkChain]:
                     energy = workchain.outputs.output_parameters.get_dict()["energy"]
                     rlx_structure = (
                         workchain.outputs.output_structure.get_pymatgen_structure()
@@ -988,6 +996,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 # print(computed_results)
 
         self.ctx.relaxed_outputs = computed_results
+
         self.ctx.supc_list = new_supercell_list
         if len(supercell_list)!= len(new_supercell_list):
             self.report(
@@ -996,7 +1005,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         return
     
-    def analyze_relaxed_structures(self):
+    def analyze_relaxed_structures(self, mode='pre-clustering', d_tol = 0.5):
         """Analyze relaxed structures.
         
         Get unique candidate sites and check if there are 
@@ -1011,7 +1020,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.report("Analyzing the relaxed structures")
         inpt_st = self.ctx.structure.get_pymatgen_structure()
 
-        if "magmom" in self.ctx:
+        if "magmom" in self.ctx and mode!='pre-clustering':
             r_anly = analyze_structures(
                 self.ctx.supc_list[0],
                 self.ctx.relaxed_outputs,
@@ -1020,20 +1029,27 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             )
         else:
             r_anly = analyze_structures(
-                self.ctx.supc_list[0], self.ctx.relaxed_outputs, inpt_st
+                self.ctx.supc_list[0], self.ctx.relaxed_outputs, inpt_st, d_tol = d_tol
             )
 
         self.ctx.unique_cluster = r_anly["unique_pos"]
+        self.ctx.cluster_mapping = r_anly["mapping"]
+        self.report(f"Mapping of relaxed structures to unique clusters: {self.ctx.cluster_mapping}")
+        
         # print('uniq_positions',self.ctx.unique_cluster)
 
         # revisit, this so the initial inputs and collected results are not ovewritten with repeated calls in outline
         self.ctx.supc_list_all = self.ctx.supc_list
         self.ctx.relaxed_outputs_all = self.ctx.relaxed_outputs
 
-        self.ctx.supc_list = r_anly["mag_inequivalent"]
+        if mode == 'pre-clustering':
+            self.ctx.supc_list = [self.ctx.supc_list_all[i] for i in set(self.ctx.cluster_mapping)]
+            self.report(f"Number of unique clusters found: {len(self.ctx.unique_cluster)}, out of {len(self.ctx.relaxed_outputs)} relaxed structures.")
+        else:
+            self.ctx.supc_list = r_anly["mag_inequivalent"]
 
     def new_struct_after_analyze(self):
-        """Check if there is new magnetic inequivalent sites"""
+        """Check if there is new magnetic inequivalent sites. This is done only in the full mesh relaxation."""
         self.report(f"Checking new structures to calculate... {len(self.ctx.supc_list) > 0}")
 
         if len(self.ctx.supc_list) > 0:
@@ -1045,7 +1061,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def collect_all_results(self):
         """Collecting results of new structures and then append"""
         self.report("Appending results of new structures ")
-
+        if not hasattr(self.ctx, "relaxed_outputs_all"):
+            self.ctx.relaxed_outputs_all = []
+        if not hasattr(self.ctx, "unique_cluster"):
+            self.ctx.unique_cluster = []
         self.ctx.relaxed_outputs_all.extend(self.ctx.relaxed_outputs)
         self.ctx.unique_cluster.extend(self.ctx.relaxed_outputs)
 
@@ -1080,7 +1099,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #inputs.kpoints_distance = orm.Float(inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid 
 
         if self.ctx.set_gamma_only:
-            inputs.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            settings = inputs.pw.settings.get_dict() if hasattr(inputs.pw, "settings") else {}
+            settings["GAMMA_ONLY"] = True
+            inputs.pw.settings = orm.Dict(dict=settings)
             if hasattr(inputs.pw, "parallelization"):
                 if "npool" in inputs.pw.parallelization.get_dict():
                     inputs.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.pw.parallelization.get_dict().items() if k != "npool"})
@@ -1128,7 +1149,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 ).get_kpoints_mesh()
     
             if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
-                inputs.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+                settings = inputs.pw.settings.get_dict() if hasattr(inputs.pw, "settings") else {}
+                settings["GAMMA_ONLY"] = True
+                inputs.pw.settings = orm.Dict(dict=settings)
             
             # Set the `CALL` link label and submit
             inputs.metadata.call_link_label = f'mu_origin_supercell_{j_index:02d}'
