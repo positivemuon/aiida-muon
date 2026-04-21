@@ -62,7 +62,7 @@ kwargs = dict(
     charge_supercell=True,
     full_dft_relax=True,
     spin_pol_dft=spin_pol_dft,
-    pre_clustering=False,  # analyze and recompute after relaxations
+    pre_clustering=True,  # analyze and recompute after relaxations
     gamma_pre_relax=True,  # pre-relax with Gamma-only k-point mesh
 )
 
