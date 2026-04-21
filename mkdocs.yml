@@ -1,0 +1,87 @@
+site_name: aiida-muon
+site_url: https://aiida-muon.readthedocs.io
+repo_url: https://github.com/positivemuon/aiida-muon
+repo_name: aiida-muon
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.top
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.footer
+    - toc.follow
+    - toc.integrate
+    - content.code.copy
+    - content.code.select
+    - content.code.annotate
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+
+markdown_extensions:
+  - attr_list
+  - md_in_html
+  - def_list
+  - admonition
+  - pymdownx.details
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+extra_javascript:
+  - javascripts/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+plugins:
+  - search
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Tutorials:
+    - Introduction: tutorials/index.md
+    - Finding Muon Sites (Si, Fe, MnO): tutorials/1_basic_findmuon.md
+    - Magnetic Materials: tutorials/2_magnetic_materials.md
+  - How-To Guides:
+    - Introduction: how_to/index.md
+    - Build the Workflow Inputs: how_to/builder.md
+    - Magnetic Calculations: how_to/magnetic.md
+    - DFT+U / Hubbard: how_to/hubbard.md
+    - Pre-Relaxation Strategies: how_to/pre_relaxation.md
+    - Analyze and Export Results: how_to/analyze_results.md
+  - Reference:
+    - Workflows: reference/workflows.md
+    - Utility Modules: reference/utils.md
+  - Advanced Topics:
+    - Introduction: advanced/index.md
+    - Workflow Internals: advanced/workflow_internals.md
+    - Machine-Learning Features (experimental): advanced/ml_features.md

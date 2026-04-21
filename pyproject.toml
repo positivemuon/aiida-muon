@@ -28,7 +28,9 @@ dependencies = [
     "pyyaml>=3.0",
     "mulfc @ git+https://github.com/bonfus/muLFC.git@v0.0.4",
     "muesr @ git+https://github.com/bonfus/muesr@master",
-    "aiida-impuritysupercellconv @ git+https://github.com/mikibonacci/aiida-impuritysupercellconv@v1.0.2"
+    "aiida-impuritysupercellconv @ git+https://github.com/mikibonacci/aiida-impuritysupercellconv@main",
+    "aiida-qe-restart @ git+https://github.com/mikibonacci/aiida-qe-restart@main",
+    "aiida-monitor @ git+https://github.com/mikibonacci/aiida-monitor@main",
 ]
 
 [project.urls]
@@ -36,24 +38,27 @@ Source = "https://github.com/positivemuon/aiida-muon"
 
 [project.optional-dependencies]
 docs = [
-    "sphinx",
-    "docutils",
-    "sphinx-copybutton~=0.3.0",
-    "sphinx-book-theme~=0.1.0",
-    "sphinx-click~=2.7.1",
-    "myst"
+    "mkdocs-material>=9.0",
+    "mkdocs>=1.5",
+    "pymdown-extensions>=10.0"
 ]
 pre-commit = [
     "pre-commit>=2.21.0"
 ]
+pythonjob = [
+    "aiida-pythonjob"
+]
 tests = [
     "pgtest~=1.3",
-    "pytest~=6.0",
+    "pytest>=7.4",
+    "pytest-cov>=4.0",
     "pytest-regressions~=2.3"
 ]
 
 [project.entry-points."aiida.workflows"]
 "muon.find_muon" = "aiida_muon.workflows.find_muon:FindMuonWorkChain"
+"muon.fine_tuning" = "aiida_muon.workflows.finetuning:FineTuningWorkChain"
+"muon.active_learning" = "aiida_muon.workflows.active_learning:ActiveLearningWorkChain"
 
 [tool.flit.module]
 name = "aiida_muon"
