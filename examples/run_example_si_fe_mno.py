@@ -1,141 +1,116 @@
 # -*- coding: utf-8 -*-
-import numpy as np
+"""
+Example: Finding muon sites in Si, Fe and MnO using FindMuonWorkChain.
+
+This script mirrors the Tutorial 1 in the documentation:
+  docs/tutorials/1_basic_findmuon.md
+
+Edit the code labels and choose a system (Si / Fe / MnO) before running.
+"""
+
 from aiida import load_profile, orm
-from aiida.plugins import DataFactory
-from aiida.engine import run, submit
-from pymatgen.core import Structure
-from pymatgen.io.cif import CifParser
+from aiida.engine import submit
+from aiida.plugins import WorkflowFactory
+from ase.build import bulk
+from aiida.orm import StructureData
 
 load_profile()
 
-import sys
+FindMuonWorkChain = WorkflowFactory('muon.find_muon')
 
-sys.path.append("../")
+# ---------------------------------------------------------------------------
+# 1. Choose the system and load a structure
+# ---------------------------------------------------------------------------
 
-from aiida_muon.workflows.find_muon import FindMuonWorkChain
-from aiida_muon.workflows.utils import read_wrkc_output
+system = "Fe"   # change to "Fe" or "MnO"
+
+if system == "Si":
+    atoms = bulk('Si', 'diamond', a=5.43)
+    structure = StructureData(ase=atoms)
+    magmom = None
+    spin_pol_dft = False
+
+elif system == "Fe":
+    atoms = bulk('Fe', 'bcc', a=2.87)
+    structure = StructureData(ase=atoms)
+    magmom = [[0, 0, 2.2]]   # 2.2 µB along z for each Fe site
+    spin_pol_dft = True
+
+elif system == "MnO":
+    atoms = bulk('MnO', crystalstructure='rocksalt', a=4.45)
+    structure = StructureData(ase=atoms)
+    magmom = [[0, 0, 4.5], [0, 0, -4.5]]   # AFM ordering
+    spin_pol_dft = True
+
+# ---------------------------------------------------------------------------
+# 2. Load codes  –  edit labels to match your installation
+# ---------------------------------------------------------------------------
+
+pw_code = orm.load_code('pw-7.3@mpc3129')   # required for all systems
+pp_code = orm.load_code('pp-7.3@mpc3129')  # required for magnetic systems
+
+# ---------------------------------------------------------------------------
+# 3. Build workflow inputs via the protocol helper
+# ---------------------------------------------------------------------------
+
+kwargs = dict(
+    pw_code=pw_code,
+    pp_code=pp_code,
+    structure=structure,
+    mu_spacing=0.5,
+    sc_matrix=[[1, 0, 0], [0, 1, 0], [0, 0, 1]], # very minimal supercell for a quick test; increase if you have time and resources
+    charge_supercell=True,
+    full_dft_relax=True,
+    spin_pol_dft=spin_pol_dft,
+    pre_clustering=False,  # analyze and recompute after relaxations
+    gamma_pre_relax=True,  # pre-relax with Gamma-only k-point mesh
+)
+
+if magmom is not None:
+    kwargs['magmom'] = magmom
+
+if system == "MnO":
+    kwargs['mu_spacing'] = 1.5
+    kwargs['hubbard'] = True    # apply DFT+U automatically
+
+builder = FindMuonWorkChain.get_builder_from_protocol(**kwargs)
+
+# Adjust scheduler options to match your cluster
+builder.relax.base.pw.metadata.options = {
+    'resources': {'num_machines': 1, 'num_mpiprocs_per_machine': 4},
+    'max_wallclock_seconds': 7200,
+}
+
+
+# ---------------------------------------------------------------------------
+# 4. Submit
+# ---------------------------------------------------------------------------
+
+node = submit(builder)
+print(f"{system} workflow submitted with PK: {node.pk}")
+print(f"Monitor with:  verdi process status {node.pk}")
+
+# ---------------------------------------------------------------------------
+# 5. Retrieve results (run after the workflow finishes)
+# ---------------------------------------------------------------------------
+#
+# node = orm.load_node(<PK>)
+#
+# all_sites    = node.outputs.all_sites.get_dict()
+# unique_sites = node.outputs.unique_sites.get_dict()
+# print("Unique muon sites:", unique_sites)
+#
+# For magnetic systems:
+# if hasattr(node.outputs, 'unique_sites_hyperfine'):
+#     print("Hyperfine fields:", node.outputs.unique_sites_hyperfine.get_dict())
+# if hasattr(node.outputs, 'unique_sites_dipolar'):
+#     print("Dipolar fields:",   node.outputs.unique_sites_dipolar.get_list())
+#
+# Export to a pandas DataFrame:
+# from aiida_muon.utils.export_findmuon import get_clustering_after_run
+# df = get_clustering_after_run(node)
+# print(df)
+
 
 # NB: FOR A PROPER RUN IT IS SUFFICIENT TO PROVIDE ONLY
 # (I)INPUT STRUCTURE/MAGMOM (II) SC MATRIX (III)THE PW AND PP CODES
-
-
-# SCMATRIX
-# scmat=np.array([ [[2,0,0],[0,2,0],[0,0,2]],])
-# scmat_node = orm.ArrayData()
-# scmat_node.set_array('sc_matrix',np.array(scmat))
-# scmat_node=orm.List([ [[2,0,0],[0,2,0],[0,0,2]], ])
-scmat_node = orm.List([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-
-
-# EDIT PW AND PP CODE TO SUIT YOURS
-codename = "pw-7.2@localhost" # edit
-code = orm.Code.get_from_string(codename)
-
-from aiida.orm import StructureData as LegacyStructureData
-
-#choose the StructureData to be used in the simulation.
-structuredata="old"
-if structuredata=="new":    
-    StructureData = DataFactory("atomistic.structure")
-else:
-    StructureData = LegacyStructureData
-
-builder = FindMuonWorkChain.get_builder()
-
-builder.sc_matrix = scmat_node
-builder.relax.base.pw.code = code
-builder.pseudo_family = orm.Str("SSSP/1.3/PBE/efficiency")
-
-system = "Fe" #Si, Fe, MnO
-
-if system == "Si":
-    kpoints_distance = orm.Float(0.601)
-    charge_supercell = orm.Bool(False)
-    parser           = CifParser("data/Si.cif")
-    smag1            = parser.get_structures(primitive = True)[0]
-    aiida_structure  = orm.StructureData(pymatgen = smag1)
-    mu_spacing = orm.Float(1.0) #for Si primitive three mu sites
-    ppcode = None
-    magmom = None
-elif system == "Fe":
-    kpoints_distance = orm.Float(0.601)
-    charge_supercell = orm.Bool(False)
-    parser           = CifParser("data/Fe_bcc.mcif")
-    smag1            = parser.get_structures(primitive = True)[0]
-    aiida_structure  = orm.StructureData(pymatgen = smag1)
-    mu_spacing = orm.Float(0.75) #for Fe  no primitive 4 mu sites
-    magmoms = smag1.site_properties["magmom"]
-    magmom = orm.List([list(magmom) for magmom in magmoms])        
-    ppcode = orm.load_code("pp-7.2@localhost")
-elif system == "MnO":
-    kpoints_distance = orm.Float(0.601)
-    charge_supercell = orm.Bool(False)
-    parser           = CifParser("data/MnO.mcif")
-    smag1            = parser.get_structures(primitive = True)[0]
-    aiida_structure  = orm.StructureData(pymatgen = smag1)
-    mu_spacing = orm.Float(1.6)  # for mno primitive 2 mu sites,  4 mno atoms
-    magmoms = smag1.site_properties["magmom"]
-    magmom = orm.List([list(magmom) for magmom in magmoms])         
-    ppcode = orm.load_code("pp-7.2@localhost")
-
-## However, this works only with old version of QE... so the best example is the one in the jupyter notebook,
-## which uses the protocols which set automatically the U.
-builder.hubbard = orm.Bool(True)
-builder.charge_supercell = orm.Bool(charge_supercell)
-builder.structure = aiida_structure
-builder.mu_spacing = mu_spacing
-builder.kpoints_distance = kpoints_distance
-builder.pp_code = ppcode
-
-if system in ["Fe","MnO"] and structuredata == "new":
-    aiida_structure.magnetization.set_from_components(magnetic_moment_per_site = magmom)
-else:
-    if magmom:
-        builder.magmom = magmom
-
-pw_metadata = {
-    "description": "Muons site calculations for " + smag1.formula,
-    #'dry_run' : True,
-    "options": {"max_wallclock_seconds": 50001, "resources": {"num_machines": 1,"num_mpiprocs_per_machine":1}},
-    "label": f"{system} muon relax test",
-}
-
-pw_settings = {"ONLY_INITIALIZATION": True}
-
-# TO DO.put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard
-parameters_dict = {
-    "CONTROL": {
-        "calculation":"relax",
-        "max_seconds": 45002, 
-        "forc_conv_thr": 0.1, 
-        "etot_conv_thr": 0.1},
-    "SYSTEM": {
-        "ecutwfc": 35.0,
-        "ecutrho": 240.0,
-        "occupations": "smearing",
-        "smearing":"gaussian",
-        "degauss": 0.01,
-    },
-    "ELECTRONS": {
-        "electron_maxstep": 100,
-        "conv_thr": 1.0e-3,
-    },
-}
-
-if magmom: 
-    parameters_dict["SYSTEM"]["nspin"] = 2
-
-builder.relax.base.pw.parameters = orm.Dict(parameters_dict)
-builder.relax.base.pw.metadata = pw_metadata
-# builder.qe.settings =orm.Dict(dict=pw_settings)
-
-if magmom:
-    builder.pwscf = builder.relax.base
-    builder.pp_metadata = pw_metadata # should change this.
-
-node = run(builder)
-print(node)
-outdata = node["unique_sites"]
-# print(outdata)
-aa = read_wrkc_output(outdata)
-# print(aa)

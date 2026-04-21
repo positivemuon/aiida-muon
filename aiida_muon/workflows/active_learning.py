@@ -33,7 +33,12 @@ from aiida.common import AttributeDict
 from aiida.plugins import WorkflowFactory
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
-from aiida_pythonjob import PythonJob
+try:
+    from aiida_pythonjob import PythonJob
+    HAS_PYTHONJOB = True
+except ImportError:
+    HAS_PYTHONJOB = False
+    PythonJob = None
 
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
 
