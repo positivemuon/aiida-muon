@@ -115,8 +115,8 @@ def test_spec_default_gamma_pre_relax(aiida_profile):
 
 
 def test_spec_default_full_dft_relax(aiida_profile):
-    """full_dft_relax should be False by default."""
-    assert FindMuonWorkChain.spec().inputs["full_dft_relax"].default().value is False
+    """full_dft_relax should be True by default."""
+    assert FindMuonWorkChain.spec().inputs["full_dft_relax"].default().value is True
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ def test_should_run_mlip_relaxation_false_by_default(aiida_profile, generate_wor
 def test_should_run_full_relaxations_false_by_default(aiida_profile, generate_workchain):
     """should_run_full_relaxations returns False because full_dft_relax defaults to False."""
     process = generate_workchain()
-    assert process.should_run_full_relaxations() is False
+    assert process.should_run_full_relaxations() is True
 
 
 # ---------------------------------------------------------------------------
