@@ -573,6 +573,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 #probably, it is better to populate defaults and then pop if not needed, as done later.
             for k,v in builder_impuritysupercellconv.items():
                 if k in ["pwscf","relax"] and ML_supercell_size: continue
+                if k == "pythonjob" and not ML_supercell_size: continue
                 if k == "relax":
                     for k1,v1 in builder_impuritysupercellconv.relax.items():
                         if k1 == "base_final_scf": continue
@@ -580,8 +581,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 else:
                     try:
                         setattr(builder.impuritysupercellconv,k,v)
-                    except Exception:
-                        raise ValueError(f"Error setting builder for IsolatedImpurityWorkChain: key {k} not found in the builder.")
+                    except Exception as e:
+                        raise ValueError(f"Error {e} while setting {k} with {v}.")
             builder.impuritysupercellconv.pop('structure', None)
         else:
             builder.sc_matrix=orm.List(sc_matrix)
@@ -639,11 +640,22 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         try:
             from aiida_monitor.monitor import monitor
-            if 'aiida_monitor.default_monitor' not in monitor_entry_point_list and activate_monitors:
-                monitor_entry_point_list.append('aiida_monitor.default_monitor')
+            from importlib.metadata import entry_points
+            registered = {ep.name for ep in entry_points().get('aiida.calculations.monitors', [])}
+            if 'aiida_monitor.default_monitor' in registered:
+                if 'aiida_monitor.default_monitor' not in monitor_entry_point_list and activate_monitors:
+                    monitor_entry_point_list.append('aiida_monitor.default_monitor')
         except Exception:
             pass
         
+        # Filter to only entry points that are actually registered
+        try:
+            from importlib.metadata import entry_points
+            registered = {ep.name for ep in entry_points().get('aiida.calculations.monitors', [])}
+            monitor_entry_point_list = [ep for ep in monitor_entry_point_list if ep in registered]
+        except Exception:
+            pass
+
         if monitor_entry_point_list and activate_monitors:
             builder.relax.base.pw.monitors = {f'monitor_{i}': orm.Dict({'entry_point': monitor_entry_point_list[i]}) for i in range(len(monitor_entry_point_list))}
 
@@ -1543,6 +1555,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
         
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["nspin"]= 2
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["starting_magnetization"] = start_mg_dict.get_dict()
+        
     else:
         start_mg_dict = None
     
