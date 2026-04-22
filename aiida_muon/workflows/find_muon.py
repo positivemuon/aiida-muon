@@ -750,6 +750,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.ctx.offset = 0 # offset for the supercell index if we find magnetic inequivalent sites.
         self.ctx.set_gamma_only = False
 
+        self.ctx.has_magnetic_inequivalent = False # to understand if we have magnetic inequivalent sites, in this case we need to set an offset for the index and we cannot set gamma only for the relaxations.
+
         # check if the calculation is non-collinear; in that case, we cannot set Gamma only even if it is 1x1x1.
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
         if inputs.base.pw.parameters.get_dict().get('SYSTEM',{}).get('noncolin',False):
@@ -1169,6 +1171,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             self.report(f"Number of unique clusters found: {len(self.ctx.unique_cluster)}, out of {len(self.ctx.relaxed_outputs)} relaxed structures.")
         else:
             self.ctx.supc_list = r_anly["mag_inequivalent"]
+            if len(self.ctx.supc_list) > 0:
+                self.ctx.has_magnetic_inequivalent = True
 
     def new_struct_after_analyze(self):
         """Check if there is new magnetic inequivalent sites. This is done only in the full mesh relaxation."""
@@ -1176,7 +1180,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         if len(self.ctx.supc_list) > 0:
             self.ctx.run_type = "full"
-            self.ctx.offset = len(self.ctx.relaxed_outputs_all)  # offset for the supercell index if we find magnetic inequivalent sites.
+            self.ctx.offset = len(self.ctx.relaxed_outputs_all) if self.ctx.has_magnetic_inequivalent else 0  # offset for the supercell index if we find magnetic inequivalent sites.
             return True
         return False
 
