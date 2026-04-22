@@ -10,6 +10,8 @@ from pymatgen.io.ase import AseAtomsAdaptor
 from pymatgen.symmetry import analyzer
 from pymatgen.util.coord import pbc_shortest_vectors
 
+from aiida_muon.workflows.utils import get_struct_wt_distortions
+
 def load_workchain_data(data):
     """load and extract relaxed structures for analysis"""
     idx_list = []
@@ -358,7 +360,7 @@ def analyze_structures(
         for i, nwp in enumerate(new_pos):
             for j, d in enumerate(rlxd_results):
                 if nwp[0] == d["idx"]:
-                    init_supc2 = init_supc.copy()
+                    init_supc2 = init_supc.get_pymatgen_structure().copy() if not isinstance(init_supc, Structure) else init_supc.copy()
                     nw_st = get_struct_wt_distortions(
                         init_supc2,
                         Structure.from_dict(d["rlxd_struct"]),
