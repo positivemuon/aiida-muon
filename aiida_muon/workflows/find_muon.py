@@ -537,6 +537,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         builder_relax.pop('structure', None)
         builder_relax.pop('base_init_relax', None)
         
+        # backward compatibility: pop base_final_scf if present, since it is not needed for the relax workflow.
+        builder_relax.pop('base_final_scf', None)
+        
         builder_pwscf['pw'].pop('structure', None)
         builder_pwscf.pop('kpoints_distance', None)       
         
@@ -755,7 +758,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         # check if the calculation is non-collinear; in that case, we cannot set Gamma only even if it is 1x1x1.
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
-        if inputs.base_relax.pw.parameters.get_dict().get('SYSTEM',{}).get('noncolin',False):
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
+        if base.pw.parameters.get_dict().get('SYSTEM',{}).get('noncolin',False):
             self.report("Non-collinear calculation detected, setting Gamma only to False.")
             self.ctx.non_collinear = True
         else:
@@ -866,14 +870,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             return False
 
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
             
-        if not "kpoints_distance" in inputs.base_relax:
+        if not "kpoints_distance" in base:
             self.report(f"Setting kpoints distance to be: {self.inputs.kpoints_distance.value}")
-            inputs.base_relax.kpoints_distance = self.inputs.kpoints_distance
+            base.kpoints_distance = self.inputs.kpoints_distance
         
         mesh = create_kpoints_from_distance(
                     self.ctx.supc_list[0],
-                    orm.Float(inputs.base_relax.kpoints_distance),
+                    orm.Float(base.kpoints_distance),
                     orm.Bool(False),
                     metadata={"store_provenance": False},
                 ).get_kpoints_mesh()
@@ -935,14 +940,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         calculations.
         """
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
         
         gamma_only_suffix = ""
 
         if self.ctx.run_type == "gamma":
             # we use a looser convergence threshold for the gamma point pre-relaxation
-            relax_parameters = inputs.base_relax.pw.parameters.get_dict()
+            relax_parameters = base.pw.parameters.get_dict()
             relax_parameters["CONTROL"]["forc_conv_thr"] = relax_parameters["CONTROL"]["forc_conv_thr"] * 50 # TODO: check if this is ok
-            inputs.base_relax.pw.parameters = orm.Dict(dict=relax_parameters)
+            base.pw.parameters = orm.Dict(dict=relax_parameters)
         
         # Make sure we have a kpoints distance
         if enforce_gamma:
@@ -950,38 +956,38 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #self.report("Enforcing gamma point only for the supercell relaxations.")
             mesh = orm.KpointsData()
             mesh.set_kpoints_mesh([1, 1, 1])
-            inputs.base_relax.kpoints = mesh
+            base.kpoints = mesh
             gamma_only_suffix = "_gamma"
             self.report("Using gamma point only for the supercell relaxations.")
             if not self.ctx.non_collinear and not isinstance(self.ctx.supc_list[0], HubbardStructureData):
-                settings = inputs.base_relax.pw.settings.get_dict() if hasattr(inputs.base_relax.pw, "settings") else {}
+                settings = base.pw.settings.get_dict() if hasattr(base.pw, "settings") else {}
                 settings["GAMMA_ONLY"] = True
-                inputs.base_relax.pw.settings = orm.Dict(dict=settings)
+                base.pw.settings = orm.Dict(dict=settings)
             else:
                 self.report("Non-collinear calculation detected or DFT+U calculation, not setting GAMMA_ONLY but a [1,1,1] mesh.")
-            if hasattr(inputs.base_relax.pw, "parallelization"):
-                if "npool" in inputs.base_relax.pw.parallelization.get_dict():
-                    inputs.base_relax.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base_relax.pw.parallelization.get_dict().items() if k != "npool"})
+            if hasattr(base.pw, "parallelization"):
+                if "npool" in base.pw.parallelization.get_dict():
+                    base.pw.parallelization = orm.Dict(dict={k:v  for k,v in base.pw.parallelization.get_dict().items() if k != "npool"})
             
         elif self.ctx.set_gamma_only:
             # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True if it is not non-collinear.
             self.report("Using gamma point only for the supercell relaxations.")
             if not self.ctx.non_collinear and not isinstance(self.ctx.supc_list[0], HubbardStructureData):
-                settings = inputs.base_relax.pw.settings.get_dict() if hasattr(inputs.base_relax.pw, "settings") else {}
+                settings = base.pw.settings.get_dict() if hasattr(base.pw, "settings") else {}
                 settings["GAMMA_ONLY"] = True
-                inputs.base_relax.pw.settings = orm.Dict(dict=settings)
+                base.pw.settings = orm.Dict(dict=settings)
             else:
                 self.report("Non-collinear calculation detected or DFT+U calculation, not setting GAMMA_ONLY but a [1,1,1] mesh.")
-            if hasattr(inputs.base_relax.pw, "parallelization"):
-                if "npool" in inputs.base_relax.pw.parallelization.get_dict():
-                    inputs.base_relax.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base_relax.pw.parallelization.get_dict().items() if k != "npool"})
+            if hasattr(base.pw, "parallelization"):
+                if "npool" in base.pw.parallelization.get_dict():
+                    base.pw.parallelization = orm.Dict(dict={k:v  for k,v in base.pw.parallelization.get_dict().items() if k != "npool"})
             
         for i_index in range(len(self.ctx.supc_list)):
 
             inputs.structure = self.ctx.supc_list[i_index]
             
             # we define the pseudos again (now we have the structure+H)
-            inputs.base_relax.pw.pseudos = get_pseudos(
+            base.pw.pseudos = get_pseudos(
                 inputs.structure, self.inputs.pseudo_family.value
             )
             
@@ -1493,7 +1499,7 @@ def get_dict_output(outdata):
 
 
 #Creates the default used in the protocols and in the forcing inputs step.
-def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft, noncollinear=False):
+def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft, noncollinear=False,):
     """
     Here, the noncollinear is used to not set the nspin parameter in the overrides.
     FOR NOW: we set the non colin params in the overrides provided by the user. It is a bit involved, but it is temporary solution!
@@ -1530,7 +1536,7 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
                 },
                 },
             },
-            #"base_final_scf": {"pseudo_family": pseudo_family,},
+            "base_final_scf": {"pseudo_family": pseudo_family,},
             "clean_workdir": orm.Bool(True),
         }
 
@@ -1571,6 +1577,13 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
     }
     # switch off charge in the pre_relax:
     _overrides["impuritysupercellconv"]["pre_relax"]["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 0
+
+    # Mirror "base" to "base_relax" so both the legacy PwRelaxWorkChain (key: "base")
+    # and the new PoweredPwRelaxWorkChain (key: "base_relax") can pick up the right key.
+    _overrides["base_relax"] = copy.deepcopy(_overrides["base"])
+    _overrides["impuritysupercellconv"]["pre_relax"]["base_relax"] = copy.deepcopy(
+        _overrides["impuritysupercellconv"]["pre_relax"]["base"]
+    )
         
     return _overrides, start_mg_dict, structure, magmom
 
@@ -1612,9 +1625,17 @@ def recursive_consistency_check(input_dict,_):
         impuritysupercellconv_inconsistency = impuritysupercellconv_input_validator(parameters["impuritysupercellconv"],None,caller="FindMuonWorkchain")
     
     if impuritysupercellconv_inconsistency: inconsistency_sentence += impuritysupercellconv_inconsistency
-    
-    if parameters["relax"]["base_relax"]["pw"]["parameters"].get_dict()["CONTROL"]["calculation"] != 'relax':
-        inconsistency_sentence+=f'Checking inputs.relax.base_relax.pw.parameters.CONTROL.calculation: can be only "relax". No cell relaxation should be performed.'
+
+    # Support both the new "base_relax" key and the legacy "base" key.
+    if "base_relax" in parameters["relax"]:
+        base_key = "base_relax"
+    elif "base" in parameters["relax"]:
+        base_key = "base"
+    else:
+        raise ValueError("Neither 'relax.base_relax' nor 'relax.base' found in inputs.")
+
+    if parameters["relax"][base_key]["pw"]["parameters"].get_dict()["CONTROL"]["calculation"] != 'relax':
+        inconsistency_sentence+=f'Checking inputs.relax.{base_key}.pw.parameters.CONTROL.calculation: can be only "relax". No cell relaxation should be performed.'
     
     
     if 'base_final_scf' in parameters['relax']:
@@ -1635,14 +1656,14 @@ def recursive_consistency_check(input_dict,_):
             inconsistency_sentence+=f'Checking inputs: "pp_metadata" input not provided but required!'
         
     for key in keys:
-        value_input_relax = iterdict(parameters["relax"]["base"]["pw"]["parameters"].get_dict(),key)
+        value_input_relax = iterdict(parameters["relax"][base_key]["pw"]["parameters"].get_dict(),key)
         value_overrides = iterdict(_overrides,key)
         #print(value_input_relax,value_input_pwscf,value_overrides)
         if value_input_relax != value_overrides:
             if value_input_relax in [0, None] and value_overrides in [0, None]:
                 continue # 0 is None and viceversa
             wrong_inputs_relax.append(key)
-            inconsistency_sentence += f'Checking inputs.relax.base_relax.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_relax}", but only "{value_overrides}" is consistent with your settings.\n'
+            inconsistency_sentence += f'Checking inputs.relax.{base_key}.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_relax}", but only "{value_overrides}" is consistent with your settings.\n'
         
         if "pwscf" in parameters: #mu scf origin.
             value_input_pwscf = iterdict(parameters["pwscf"]["pw"]["parameters"].get_dict(),key)
