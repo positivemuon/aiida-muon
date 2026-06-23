@@ -21,7 +21,7 @@ keywords = ["aiida", "workflows"]
 requires-python = ">=3.8"
 dependencies = [
     "aiida-core>=2.0,<3",
-    "aiida-quantumespresso>=4.2.0",
+    "aiida-quantumespresso>=5.0.0",
     "aiida-pseudo",
     "pymatgen",
     "spglib>=1.9",
