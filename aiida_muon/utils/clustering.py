@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
 import numpy as np
-from muesr.core import Sample
-from muesr.core.atoms import Atoms
-from muesr.engines.clfc import find_largest_sphere, locfield
-from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
 from pymatgen.io.ase import AseAtomsAdaptor
@@ -19,7 +15,10 @@ def load_workchain_data(data):
     enrg_list1 = []
     for j, d in enumerate(data):
         idx_list.append(d["idx"])
-        scst = Structure.from_dict(d["rlxd_struct"])
+        if not isinstance(d["rlxd_struct"], Structure):
+            scst = Structure.from_dict(d["rlxd_struct"])
+        else:
+            scst = d["rlxd_struct"]
         mu_list.append(scst.frac_coords[scst.atomic_numbers.index(1)])  # for muon
         enrg_list1.append(d["energy"])
 
@@ -181,7 +180,13 @@ def find_equivalent_positions(
                     eq_list[j] = i
     return eq_list
 
-def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
+def cluster_unique_sites(
+        idx_list, mu_list, enrg_list, p_st, p_smag,
+        d_tol = 0.5,  # inter-site distance tolerance for clustering in Ang
+        s_tol = 0.05,  # symmetry tolerance for clustering in Ang
+        e_tol = 0.05,  # energy difference tolerance for clustering in eV
+        a_tol = 1e-3,  # symmetry tolerance for printing equi sites in Ang
+        ):
     """
     Function that clusters + get symmetry unique muon positions
     from list of muon sites from relax calculations.
@@ -226,12 +231,6 @@ def cluster_unique_sites(idx_list, mu_list, enrg_list, p_st, p_smag):
     # 3For step 3 of checking  non present magnetic inequival sites,
     # we can decide to check this only for sites with energy less than 0.6 eV?
 
-    # We can set two sets of threshold, normal and loose?
-    # Normal thresholds
-    d_tol = 0.5  # inter-site distance tolerance for clustering in Ang
-    s_tol = 0.05  # symmetry tolerance for clustering in Ang
-    e_tol = 0.05  # energy difference tolerance for clustering in eV
-    a_tol = 1e-3  # symmetry tolerance for printing equi sites in Ang
 
     # Step1
     idx, mapping = prune_too_close_pos(mu_list, p_smag, d_tol, enrg_list)
@@ -318,7 +317,13 @@ def get_poslist1_not_in_list2(pos_lst1, pos_lst2, host_lattice, d_tol=0.5):
     pos_not_in_list = pos_lst1[s_idx != np.arange(len(pos_lst1))]
     return pos_not_in_list
 
-def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
+def analyze_structures(
+        init_supc, rlxd_results, input_st, magmom=None,
+        d_tol = 0.5,  # inter-site distance tolerance for clustering in Ang
+        s_tol = 0.05,  # symmetry tolerance for clustering in Ang
+        e_tol = 0.05,  # energy difference tolerance for clustering in eV
+        a_tol = 1e-3,  # symmetry tolerance for printing equi sites in Ang
+        ):
     """
     This calls "cluster_unique_sites" function that analyzes and clusters
     the relaxed muon positions.
@@ -338,7 +343,8 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
         st_smag = input_st.copy()
 
     clus_pos, new_pos, mapping = cluster_unique_sites(
-        idx_lst, mu_lst, enrg_lst, p_st=input_st, p_smag=st_smag
+        idx_lst, mu_lst, enrg_lst, p_st=input_st, p_smag=st_smag,
+        d_tol=d_tol, s_tol=s_tol, e_tol=e_tol, a_tol=a_tol
     )
 
     # REVISIT
@@ -370,7 +376,13 @@ def analyze_structures(init_supc, rlxd_results, input_st, magmom=None):
     return {"unique_pos": uniq_clus_pos, "mag_inequivalent": nw_stc_calc, "mapping": mapping}
 
 
-def get_clustering_after_run(findmuon_node):
+def get_clustering_after_run(
+        findmuon_node,
+        d_tol = 0.5,  # inter-site distance tolerance for clustering in Ang
+        s_tol = 0.05,  # symmetry tolerance for clustering in Ang
+        e_tol = 0.05,  # energy difference tolerance for clustering in eV
+        a_tol = 1e-3,  # symmetry tolerance for printing equi sites in Ang
+        ):
     """
     This function is called after the findmuon workchain has been run.
     It loads the results of the workchain and the input structure and
@@ -406,4 +418,7 @@ def get_clustering_after_run(findmuon_node):
     else:
         magmom = None
 
-    return analyze_structures(init_supc, rlxd_results, input_st, magmom)
+    return analyze_structures(
+        init_supc, rlxd_results, input_st, magmom,
+        d_tol=d_tol, s_tol=s_tol, e_tol=e_tol, a_tol=a_tol
+        )

@@ -5,13 +5,9 @@ from aiida import orm
 from aiida.engine import WorkChain, calcfunction, if_
 from aiida.plugins import CalculationFactory, DataFactory, WorkflowFactory
 from aiida_quantumespresso.common.types import RelaxType
-from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
-from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
-from aiida_quantumespresso.common.types import ElectronicType, RelaxType, SpinType
-from pymatgen.core import Structure
-from pymatgen.electronic_structure.core import Magmom
+from aiida_quantumespresso.workflows.protocols.utils import recursive_merge, ProtocolMixin
+from pymatgen.core import Structure, Element
 from aiida.common import AttributeDict
-from aiida_quantumespresso.utils.mapping import prepare_process_inputs
 from typing import Union
 
 from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import (
@@ -29,10 +25,29 @@ from aiida_muon.utils.clustering import analyze_structures
 from aiida_muon.utils.magnetism import make_collinear_getmag_kind, compute_dipolar_field
 from aiida_muon.utils.hubbard import check_get_hubbard_u_parms, create_hubbard_structure
 
-#StructureData = DataFactory("atomistic.structure")
+try:
+    from aiida_pythonjob import PythonJob
+    HAS_PYTHONJOB = True
+except ImportError:
+    HAS_PYTHONJOB = False
+    PythonJob = None
+
+try:
+    StructureData = DataFactory("atomistic.structure")
+    HAS_ATOMISTIC = True
+    valid_types = (StructureData, LegacyStructureData, HubbardStructureData)
+except Exception:
+    HAS_ATOMISTIC = False
+    valid_types = (LegacyStructureData, HubbardStructureData)
+
 PwBaseWorkChain = WorkflowFactory('quantumespresso.pw.base')
-PwRelaxWorkChain = WorkflowFactory('quantumespresso.pw.relax')
+
+from aiida_quantumespresso.workflows.pw.relax import PwRelaxWorkChain as LegacyPwRelaxWorkChain
+from aiida_qe_restart.relax import PoweredPwRelaxWorkChain as PwRelaxWorkChain
+
 IsolatedImpurityWorkChain = WorkflowFactory('impuritysupercellconv')
+
+_original_IsolatedImpurityWorkChain_validator = IsolatedImpurityWorkChain.spec().inputs.validator
 
 def IsolatedImpurityWorkChain_override_validator(inputs,ctx=None):
     """validate inputs for impuritysupercellconv.relax; actually, it is
@@ -42,7 +57,7 @@ def IsolatedImpurityWorkChain_override_validator(inputs,ctx=None):
     if "impuritysupercellconv" in inputs.keys():
         if "parameters" in inputs["impuritysupercellconv"]["pwscf"]["pw"].keys():
             if len(inputs["impuritysupercellconv"]["pwscf"]["pw"]["parameters"].get_dict()):
-                original_IsolatedImpurityWorkChain.spec().inputs.validator(inputs["impuritysupercellconv"],ctx)
+                _original_IsolatedImpurityWorkChain_validator(inputs["impuritysupercellconv"],ctx)
             else:
                 return None
         else:
@@ -52,12 +67,40 @@ IsolatedImpurityWorkChain.spec().inputs.validator = IsolatedImpurityWorkChain_ov
 
 
 class FindMuonWorkChain(ProtocolMixin, WorkChain):
-    """
-    FindMuonWorkChain finds the candidate implantation site for a positive muon.
-    It first performs DFT relaxation calculations for a set of initial muon sites.
-    It then analyzes the results of these calculations and finds candidate muon sites.
-    If there are magnetic inequivalent sites not initially, they are recalculated
-    It further calculates the muon contact hyperfine field at these candidate sites.
+    """WorkChain for finding candidate muon implantation sites in a crystal.
+
+    The workflow proceeds through the following stages:
+
+    1. **Supercell size determination** – either uses the ``sc_matrix`` provided
+       by the user, or calls ``IsolatedImpurityWorkChain`` to determine the
+       minimum converged supercell automatically.
+    2. **Initial muon sites** – the NICHE algorithm distributes candidate muon
+       positions on a grid over the unit cell, respecting the ``mu_spacing``
+       distance constraint.
+    3. **Supercell generation** – each starting site is embedded into a supercell.
+    4. **Pre-relaxation (optional)** – reduce the number of DFT calculations by
+       first relaxing with a cheap method:
+
+       - ``gamma_pre_relax=True``: Γ-point-only DFT relaxation.
+       - ``ML_pre_relax=True``: MLIP relaxation via ``PythonJob`` (experimental).
+
+       After each pre-relaxation step, a clustering pass removes duplicates
+       before the next (more expensive) step runs.
+    5. **Full DFT relaxation** – one ``PwRelaxWorkChain`` per surviving supercell
+       (skipped when ``full_dft_relax=False``).
+    6. **Clustering** – relaxed muon positions are grouped by spatial proximity
+       and energy; symmetry-equivalent sites are merged.
+    7. **Hyperfine and dipolar fields** (magnetic materials only) – a final SCF
+       calculation places the muon at the origin (``PwBaseWorkChain``); the
+       contact hyperfine field is evaluated from the spin density via ``pp.x``,
+       and the classical dipolar field is computed with ``muesr``.
+
+    Monitor support
+    ---------------
+    When ``aiida-monitor`` is installed, the ``aiida_monitor.default_monitor``
+    is attached automatically to every ``PwBaseWorkChain`` relaxation step
+    (controlled by ``activate_monitors`` in ``get_builder_from_protocol``).
+    Additional monitors can be passed via ``monitor_entry_point_list``.
     """
 
     @classmethod
@@ -65,9 +108,19 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """Specify inputs and outputs."""
         super().define(spec)
 
+        if HAS_PYTHONJOB:
+            spec.expose_inputs(
+                PythonJob,
+                namespace='pythonjob',
+                namespace_options={
+                    'required': False,
+                    'populate_defaults': False,
+                    'help': 'Inputs for MLIPs calculations.',
+                },
+            )
         spec.input(
             "structure",
-            valid_type=(LegacyStructureData, HubbardStructureData),
+            valid_type=valid_types,
             required=False,
             help="Input initial structure",
         )
@@ -85,6 +138,14 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             default=lambda: orm.Float(1.0),
             required=False,
             help="Minimum distance in Angstrom between two starting muon positions  generated on a grid.",
+        )
+        
+        spec.input(
+            "niche_atom",
+            valid_type=orm.Str,
+            default=lambda: orm.Str("H"),
+            required=False,
+            help="Chemical symbol of the impurity atom to use for muon site generation.",
         )
 
         # read as list or array?
@@ -158,10 +219,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             help="To run ML pre-relaxation or not",
         )
         spec.input(
-            "skip_dft_relax",
+            "full_dft_relax",
             valid_type=orm.Bool,
-            default=lambda: orm.Bool(False),
-            help="To skip DFT relaxation or not",
+            default=lambda: orm.Bool(True),
+            help="Whether to run full k-mesh DFT relaxation. Set to False to skip DFT relaxation entirely (e.g. when only MLIP or Gamma pre-relaxation results are needed).",
         )
         spec.input(
             "supercells_list",
@@ -169,11 +230,18 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             required=False,
             help="List of supercells to be used for the relaxation",
         )
+        spec.input(
+            "pre_clustering",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(False),
+            required=False,
+            help="Whether to analyze and recompute structures after each pre-relaxation step. For full relax, it is always reanalyzed.",
+        )
 
         spec.expose_inputs(
             PwRelaxWorkChain,
             namespace="relax",
-            exclude=("structure","base_final_scf"),
+            exclude=("structure"),
             namespace_options={
                 'required': True, 
                 'populate_defaults': False,
@@ -209,14 +277,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             help=" Preferred metadata and scheduler options for pp.x",
         )
 
-        spec.input(
-            "impuritysupercellconv_metadata",
-            valid_type=dict,
-            non_db=True,
-            required=False,
-            help=" Preferred metadata and scheduler options for impuritysupercellconv",
-        )
-
         # activate IsolatedImpurityWorkChain only if sc_matrix input not present.
         spec.expose_inputs(
             IsolatedImpurityWorkChain,
@@ -242,25 +302,29 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 cls.get_initial_muon_sites,
                 cls.get_initial_supercell_structures,
             ),
-            if_(cls.should_run_gamma_relaxations)(
-                cls.prepare_gamma_relaxations,
+            if_(cls.should_run_mlip_relaxation)(
                 cls.compute_supercell_structures,
                 cls.collect_relaxed_structures,
+                cls.run_cluster_analysis,
+            ),
+            if_(cls.should_run_gamma_relaxations)(
+                cls.compute_supercell_structures,
+                cls.collect_relaxed_structures,
+                cls.run_cluster_analysis,
             ),
             if_(cls.should_run_full_relaxations)(
-                cls.prepare_full_relaxations,
                 cls.compute_supercell_structures,
                 cls.collect_relaxed_structures,
+                cls.run_cluster_analysis,
+                if_(cls.new_struct_after_analyze)(   # we do this analysis only for the full mesh case.
+                    cls.compute_supercell_structures,
+                    cls.collect_relaxed_structures,
+                ),
             ),
-            cls.analyze_relaxed_structures,
-            if_(cls.new_struct_after_analyze)(
-                cls.compute_supercell_structures,
-                cls.collect_relaxed_structures,
-                cls.collect_all_results,
-            ),
+            cls.collect_all_results,
             if_(cls.structure_is_magnetic)(
                 if_(cls.spin_polarized_dft)(
-                    cls.run_final_scf_mu_origin,  # to be removed if better alternative
+                    cls.run_final_scf_mu_origin,
                     cls.compute_spin_density,
                     cls.compute_contact_hyperfine,
                 ),
@@ -291,7 +355,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             message="One of the PPWorkChain subprocesses failed",
         )
         spec.exit_code(
-            407,
+            408,
             "ERROR_NO_SUPERCELLS",
             message="No supercells available: try to decrease mu_spacing.",
         )
@@ -314,13 +378,12 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         spec.output(
             "unique_sites_dipolar", valid_type=orm.List, required=False
             )  # return only when magnetic
-        
-        
+
     @classmethod
     def get_builder_from_protocol(
         cls,
         pw_code,
-        structure: Union[LegacyStructureData, HubbardStructureData],
+        structure: Union[StructureData, LegacyStructureData, HubbardStructureData] if HAS_ATOMISTIC else Union[LegacyStructureData, HubbardStructureData], # type: ignore
         pp_code: orm.Code = None,
         protocol: str =None,
         overrides: dict = {},
@@ -331,6 +394,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         options=None,
         sc_matrix: list =None,
         mu_spacing: float = 1.0,
+        niche_atom: str = "H",
         kpoints_distance: float = 0.301,
         charge_supercell: bool =True,
         hubbard: bool = True,
@@ -339,8 +403,16 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         pseudo_family: str ="SSSP/1.3/PBE/efficiency",
         gamma_pre_relax: bool = False,
         ML_pre_relax: bool = False,
-        skip_dft_relax: bool = False,
+        ML_supercell_size: bool = False,
+        pythonjob_code: orm.Code = None,
+        callback_calculator: callable = None,
+        full_dft_relax: bool = True,
         supercells_list: list = [],
+        pre_clustering: bool = False,
+        noncollinear: bool = False,
+        monitor_entry_point_list: list = [],
+        activate_monitors: bool = True,
+        additional_pythonjob_inputs: dict = {},
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -348,27 +420,74 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         :param pw_code: the ``Code`` instance configured for the ``quantumespresso.pw`` plugin.
         :param structure: the ``StructureData`` instance to use.
         :param pp_code: the ``Code`` instance configured for the ``quantumespresso.pp`` plugin.
-        :param protocol: protocol to use, if not specified, the default will be used.
+            Required when ``magmom`` is set and contact hyperfine fields are desired.
+        :param protocol: QE calculation protocol (``'fast'``, ``'moderate'``, ``'precise'``).
+            Defaults to ``'moderate'`` when not specified.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
-        :param enforce_defaults: if True, will enforce that all inputs of the protocol are set, if False, only the required ones.
-        :param relax_unitcell: To relax the unit cell or not.
-        :param options: A dictionary of options that will be recursively set for the ``metadata.options`` input of all
-            the ``CalcJobs`` that are nested in this work chain.
-        :param sc_matrix: List of length 1 for supercell size.
-        :param mu_spacing: Minimum distance in Angstrom between two starting muon positions  generated on a grid..
-        :param kpoints_distance: the minimum desired distance in 1/Å between k-points in reciprocal space.
-        :param charge_supercell: To run charged supercell for positive muon or not (neutral supercell).
-        :param hubbard: To check and get Hubbard U value or not.
-        :param hubbard_dict: Dictionary of Hubbard U values.
-        :param pseudo_family: the label of the pseudo family.
+        :param enforce_defaults: if ``True``, merge protocol defaults into ``overrides`` before
+            building the sub-workflow builders. Default ``True``.
+        :param relax_unitcell: pre-relax the unit cell before placing the muon. Default ``False``.
+        :param conv_thr: force convergence threshold (eV/Å) for the supercell convergence step.
+            Default ``0.0257`` eV/Å (≈ 1 × 10⁻³ a.u.).
+        :param magmom: per-site 3-component magnetic moments (µB) in the **unit cell**, e.g.
+            ``[[0, 0, 2.2]]`` for one Fe site. Enables spin-polarised DFT and hyperfine
+            calculation when combined with ``pp_code``.
+        :param options: dictionary of scheduler options (``resources``, ``max_wallclock_seconds``,
+            etc.) applied recursively to all nested ``CalcJob`` inputs.
+        :param sc_matrix: explicit supercell matrix, e.g. ``[[2, 0, 0], [0, 2, 0], [0, 0, 2]]``.
+            When provided, the ``IsolatedImpurityWorkChain`` convergence step is skipped.
+        :param mu_spacing: minimum distance (Å) between two starting muon grid points.
+            Default ``1.0``.
+        :param niche_atom: chemical symbol used as placeholder for the muon in the NICHE
+            algorithm (must be a valid element symbol). Default ``'H'``.
+        :param kpoints_distance: minimum desired k-point spacing (Å⁻¹). Default ``0.301``.
+        :param charge_supercell: run a charge +1 supercell to model the positive muon.
+            Default ``True``.
+        :param hubbard: detect and apply DFT+U corrections automatically based on element
+            heuristics. Default ``True``.
+        :param hubbard_dict: override the automatic Hubbard U values; keys are element/kind
+            labels, values are U in eV.
+        :param spin_pol_dft: run spin-polarised DFT. Default ``True``; automatically set
+            to ``True`` when ``magmom`` is provided.
+        :param pseudo_family: label of the pseudopotential family. Default
+            ``'SSSP/1.3/PBE/efficiency'``.
+        :param gamma_pre_relax: run a cheap Γ-point-only DFT pre-relaxation to reduce the
+            number of candidate sites before the full k-mesh step. Default ``False``.
+        :param ML_pre_relax: run an MLIP pre-relaxation via ``PythonJob`` before DFT
+            (experimental). Requires ``pythonjob_code`` and ``callback_calculator``.
+            Default ``False``.
+        :param ML_supercell_size: use MLIP forces inside ``IsolatedImpurityWorkChain`` to
+            determine the supercell size (experimental). Default ``False``.
+        :param pythonjob_code: ``Code`` node for the ``PythonJob`` process; required when
+            ``ML_pre_relax=True`` or ``ML_supercell_size=True``.
+        :param callback_calculator: ASE-compatible MLIP callable used for ML force/relaxation
+            calculations; required when ``ML_pre_relax=True`` or ``ML_supercell_size=True``.
+        :param full_dft_relax: run the full k-mesh DFT relaxation step. Set to ``False`` to
+            skip DFT entirely (e.g. when only MLIP or Gamma pre-relaxation results are needed).
+            Default ``True``.
+        :param supercells_list: list of UUIDs of already-generated ``StructureData`` nodes
+            (supercells with the muon included) to use instead of automatic site generation.
+        :param pre_clustering: cluster and prune duplicate sites after each pre-relaxation
+            step before proceeding to the next (more expensive) step. Default ``False``.
+        :param noncollinear: set to ``True`` for non-collinear magnetic calculations;
+            disables automatic Gamma-only optimisation. Default ``False``.
+        :param monitor_entry_point_list: list of ``aiida-monitor`` entry-point strings to
+            attach to every ``PwBaseWorkChain`` relaxation. The
+            ``'aiida_monitor.default_monitor'`` entry point is appended automatically when
+            ``aiida-monitor`` is installed and ``activate_monitors=True``.
+        :param activate_monitors: enable monitor attachment. When ``True`` (default) and
+            ``aiida-monitor`` is installed, ``aiida_monitor.default_monitor`` is added
+            automatically. Set to ``False`` to disable all monitors.
+        :param additional_pythonjob_inputs: extra keyword arguments forwarded to the
+            ``PythonJob`` input-preparation helper (e.g. metadata, custom serialisers).
         :return: a process builder instance with all inputs defined ready for launch.
         """
         
         from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 
         # the get defaul also changes the structure, if needed (magmoms and hubbardstructuredata as input)
-        _overrides, start_mg_dict, structure, magmom = get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft)
-            
+        _overrides, start_mg_dict, structure, magmom = get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell, magmom, spin_pol_dft, noncollinear)
+        
         if enforce_defaults:
             overrides = recursive_merge(overrides,_overrides)
         
@@ -389,20 +508,10 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     structure.initialize_onsites_hubbard(kind, '3d', U, 'U', use_kinds=True)
                 structure.hubbard = Hubbard.from_list(structure.hubbard.to_list(), projectors="atomic")
         
-        #### IsolatedImpurityWorkChain
-        builder_impuritysupercellconv = IsolatedImpurityWorkChain.get_builder_from_protocol(
-                pw_code = pw_code,
-                structure = structure,
-                pseudo_family = pseudo_family,
-                relax_unitcell = relax_unitcell,
-                charge_supercell = charge_supercell, # <== by default it is false.
-                kpoints_distance = kpoints_distance,
-                conv_thr = conv_thr,
-                overrides = overrides.pop("impuritysupercellconv",None),
-                )
-        
         #builder_impuritysupercellconv.pop('structure', None)
         
+        overrides["base"]["pw"].pop('pseudos', None)
+
         #### PwBaseWorkChain for final scf mu-origin
         builder_pwscf = PwBaseWorkChain.get_builder_from_protocol(
                 pw_code,
@@ -426,6 +535,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 )
         
         builder_relax.pop('structure', None)
+        builder_relax.pop('base_init_relax', None)
+        
+        # backward compatibility: pop base_final_scf if present, since it is not needed for the relax workflow.
         builder_relax.pop('base_final_scf', None)
         
         builder_pwscf['pw'].pop('structure', None)
@@ -436,36 +548,66 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         builder.structure = structure
         builder.pseudo_family = orm.Str(pseudo_family)
-        builder_impuritysupercellconv.pseudo_family = orm.Str(pseudo_family)
         
-        #setting subworkflows inputs
-        #probably, it is better to populate defaults and then pop if not needed, as done later.
-        for k,v in builder_impuritysupercellconv.items():
-            if k == "relax":
-                for k1,v1 in builder_impuritysupercellconv.relax.items():
-                    if k1 == "base_final_scf": continue
-                    setattr(builder.impuritysupercellconv.relax,k1,v1)
+        #### IsolatedImpurityWorkChain
+        if not sc_matrix:
+            if ML_supercell_size:
+                builder_impuritysupercellconv = IsolatedImpurityWorkChain.get_builder_from_protocol(
+                    structure=structure,
+                    pythonjob_code=pythonjob_code,
+                    callback_calculator=callback_calculator,
+                    charged_supercell=charge_supercell,
+                    ML_forces=True,  # Enable MLIP force calculations
+                    **additional_pythonjob_inputs,
+                )
             else:
-                setattr(builder.impuritysupercellconv,k,v)
-        #builder.impuritysupercellconv = builder_impuritysupercellconv  If you use this instead of the above, it will give ValueError.
-        builder.pwscf = builder_pwscf
-        builder.relax = builder_relax
+                builder_impuritysupercellconv = IsolatedImpurityWorkChain.get_builder_from_protocol(
+                    pw_code = pw_code,
+                    structure = structure,
+                    pseudo_family = pseudo_family,
+                    relax_unitcell = relax_unitcell,
+                    charge_supercell = charge_supercell, # <== by default it is false.
+                    kpoints_distance = kpoints_distance,
+                    conv_thr = conv_thr,
+                    overrides = overrides.pop("impuritysupercellconv",None),
+                    )
+                builder_impuritysupercellconv.pseudo_family = orm.Str(pseudo_family)
+                #setting subworkflows inputs
+                #probably, it is better to populate defaults and then pop if not needed, as done later.
+            for k,v in builder_impuritysupercellconv.items():
+                if k in ["pwscf","relax"] and ML_supercell_size: continue
+                if k == "pythonjob" and not ML_supercell_size: continue
+                if k == "relax":
+                    for k1,v1 in builder_impuritysupercellconv.relax.items():
+                        if k1 == "base_final_scf": continue
+                        setattr(builder.impuritysupercellconv.relax,k1,v1)
+                else:
+                    try:
+                        setattr(builder.impuritysupercellconv,k,v)
+                    except Exception as e:
+                        raise ValueError(f"Error {e} while setting {k} with {v}.")
+            builder.impuritysupercellconv.pop('structure', None)
+        else:
+            builder.sc_matrix=orm.List(sc_matrix)
         
-        #if not relax_unitcell: builder.impuritysupercellconv.pop('relax')
-        builder.impuritysupercellconv.pop('structure')
+        builder.pwscf = builder_pwscf
+        builder.relax = builder_relax  
+          
         
         # If magmoms are defined, we need to set the spin_pol_dft to True
         if start_mg_dict: 
             if isinstance(magmom, list):
                 magmom = orm.List(magmom)
             builder.magmom = magmom
-        
-        # If sc_matrix, we do not need to run the IsolatedImpurityWorkChain
-        if sc_matrix: 
-            builder.sc_matrix=orm.List(sc_matrix)
-            builder.pop('impuritysupercellconv')
+
+        # Validate that niche_atom is a valid element
+        try:
+            Element(niche_atom)
+        except Exception as e:
+            raise ValueError(f"niche_atom should be a valid chemical symbol, got {niche_atom}")
 
         builder.mu_spacing=orm.Float(mu_spacing)
+        builder.niche_atom=orm.Str(niche_atom)
         builder.charge_supercell=orm.Bool(charge_supercell)
         builder.kpoints_distance = orm.Float(kpoints_distance)
         builder.hubbard = orm.Bool(hubbard)
@@ -475,23 +617,53 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if pp_code: builder.pp_code = pp_code
         
         # Checking for additional metadata
-        for i in ["pp_metadata","impuritysupercellconv_metadata","qe_settings"]:
+        for i in ["pp_metadata","qe_settings"]:
             # I don't like this.
             if i in overrides.keys():
                 builder[i] = overrides[i] 
                 
         builder.gamma_pre_relax = orm.Bool(gamma_pre_relax)
         builder.ML_pre_relax = orm.Bool(ML_pre_relax)
-        builder.skip_dft_relax = orm.Bool(skip_dft_relax)
+        builder.full_dft_relax = orm.Bool(full_dft_relax)
+        builder.pre_clustering = orm.Bool(pre_clustering)
         
         if builder.ML_pre_relax:
-            raise NotImplementedError("Machine learning relaxations not implemented yet.")
+            from aiida_muon.pythonjobs.relax import prepare_ase_pythonjob_relaxation_inputs
+            pythonjob_inputs = prepare_ase_pythonjob_relaxation_inputs(
+                structure=structure,
+                pythonjob_code=pythonjob_code,
+                callback_calculator=callback_calculator,
+                charged_supercell=charge_supercell,
+                **additional_pythonjob_inputs,
+
+            )
+            builder.pythonjob = pythonjob_inputs
         
         if len(supercells_list)>0:
             builder.supercells_list = orm.List(list=supercells_list)
         
+        try:
+            from aiida_monitor.monitor import monitor
+            from importlib.metadata import entry_points
+            registered = {ep.name for ep in entry_points().get('aiida.calculations.monitors', [])}
+            if 'aiida_monitor.default_monitor' in registered:
+                if 'aiida_monitor.default_monitor' not in monitor_entry_point_list and activate_monitors:
+                    monitor_entry_point_list.append('aiida_monitor.default_monitor')
+        except Exception:
+            pass
+        
+        # Filter to only entry points that are actually registered
+        try:
+            from importlib.metadata import entry_points
+            registered = {ep.name for ep in entry_points().get('aiida.calculations.monitors', [])}
+            monitor_entry_point_list = [ep for ep in monitor_entry_point_list if ep in registered]
+        except Exception:
+            pass
+
+        if monitor_entry_point_list and activate_monitors:
+            builder.relax.base_relax.pw.monitors = {f'monitor_{i}': orm.Dict({'entry_point': monitor_entry_point_list[i]}) for i in range(len(monitor_entry_point_list))}
+
         return builder
-    
     
     def pre_check_structure_data_compatibility(self):
         """
@@ -510,9 +682,11 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """
         if hasattr(self.inputs,"sc_matrix"):
             self.ctx.sc_matrix = self.inputs.sc_matrix.get_list()
-                    
-        return not hasattr(self.inputs,"sc_matrix")
-    
+            self.report(f"Supercell size provided in the inputs: {self.ctx.sc_matrix}. Skipping supercell convergence step.")
+            return False
+        self.report("No supercell size provided in the inputs. We will submit the IsolatedImpurityWorkChain to determine the supercell size.")
+        return True
+       
     def run_converge_supercell_size(self):
         """Call IsolatedImpurityWorkChain for supercell convergence.
         
@@ -527,10 +701,6 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         # We ensure we use a kpoints_distance, if not present in the inputs, we use the FindMuonWorkChain one.
         if not "kpoints_distance" in inputs:
             inputs.kpoints_distance = self.inputs.kpoints_distance
-        
-        # specific metadata for the IsolatedImpurityWorkChain, directly exposed in this workflow for user friendliness.
-        if hasattr(self.inputs,"impuritysupercellconv_metadata"):
-            inputs.pwscf.pw.metadata = self.inputs.impuritysupercellconv_metadata
 
         # Specific name and submittions
         inputs.metadata.call_link_label = f'IsolatedImpurityWorkChain'
@@ -543,50 +713,59 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         self.to_context(**{"IsolatedImpurityWorkChain": future})
 
     def check_supercell_convergence(self):
-        """ Check that the IsolatedImpurityWorkChain is finished ok
-        
-        """
+        """Check that the IsolatedImpurityWorkChain is finished ok."""
         if not self.ctx["IsolatedImpurityWorkChain"].is_finished_ok:
             self.report("The IsolatedImpurityWorkChain (supercell size estimation) failed. Exiting the workflow.")
             return self.exit_codes.ERROR_MUSCONV_CALC_FAILED
-        else:
-            sc_mat_array = self.ctx["IsolatedImpurityWorkChain"].outputs.Converged_SCmatrix.get_array('sc_mat')
-            self.ctx.sc_matrix = sc_mat_array.tolist()
-            self.report(f"Supercell size computed to be: {sc_mat_array}")
+        
+        sc_mat_array = self.ctx["IsolatedImpurityWorkChain"].outputs.Converged_SCmatrix.get_array('sc_mat')
+        self.ctx.sc_matrix = sc_mat_array.tolist()
+        self.report(f"Supercell size computed to be: {sc_mat_array}")
+        return
                 
     def setup(self):
-        """Setup for the workflow.
+        """Setup for the find-muon workflow.
         
         In particular, we set the structure and the magnetization information, if any.
         We no more setup the hubbard dictionary here: the Hubbard parameters should be defined in the `get_builder_from_protocols`.
         """
-        if not hasattr(self.ctx,"structure"): 
+        if not hasattr(self.ctx, "structure"): 
             # TODO: set, if any the final relaxed unit cell as obtained from the IsolatedImpurityWorkChain pre-relaxation.
             self.ctx.structure = self.inputs.structure
             
-        if hasattr(self.inputs,"matrix"):
+        if hasattr(self.inputs, "sc_matrix"):
             self.ctx.sc_matrix = self.inputs.sc_matrix.get_list()
-        elif not hasattr(self.ctx,"sc_matrix"):
+        elif not hasattr(self.ctx, "sc_matrix"):
             raise ValueError("No supercell matrix defined. Exiting the workflow.")
         
-        # checking if we are using the atomistic.StructureData or not. 
-        # NOTE: the atomistic.StructureData is not yet implemented, this is just a placehoder.
-        # to use magnetization info, we need always to pass `magmom` as input.
+
         if "magmom" in self.inputs:
             self.ctx.magmom = self.inputs.magmom.get_list()
-            
+        
+        # We can also pass the hubbard info separatly, as we check now... but not ideal. we should use atomistic StructureData or HubbardStructureData.
         if hasattr(self.inputs,"hubbard_dict"):
             self.ctx.hubbardu_dict = self.inputs.hubbard_dict.get_dict()
         else:
             self.ctx.hubbardu_dict = {}
         
-        # init relaxation calc count
-        self.ctx.n = 0
+        # setting some variable for the workflow 
+        self.ctx.n = 0 # init relaxation calc count
         self.ctx.n_uuid_dict = {}
         self.ctx.offset = 0 # offset for the supercell index if we find magnetic inequivalent sites.
-        
         self.ctx.set_gamma_only = False
+
+        self.ctx.has_magnetic_inequivalent = False # to understand if we have magnetic inequivalent sites, in this case we need to set an offset for the index and we cannot set gamma only for the relaxations.
+
+        # check if the calculation is non-collinear; in that case, we cannot set Gamma only even if it is 1x1x1.
+        inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
+        if base.pw.parameters.get_dict().get('SYSTEM',{}).get('noncolin',False):
+            self.report("Non-collinear calculation detected, setting Gamma only to False.")
+            self.ctx.non_collinear = True
+        else:
+            self.ctx.non_collinear = False
         
+        # We can also provide a list of supercell to run, if we do not want to use the automated generation.
         self.ctx.supc_list = [orm.load_node(uuid) for uuid in self.inputs.supercells_list.get_list()] if hasattr(self.inputs,"supercells_list") else []
 
         return
@@ -603,19 +782,28 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         """Get list of starting muon sites.
         
         """
+        
+        niche_atom = self.inputs.niche_atom.value
+        
+        # Validate that niche_atom is a valid element
+        try:
+            Element(niche_atom)
+        except Exception as e:
+            self.report(f"Invalid niche_atom '{niche_atom}': {e}")
+            return self.exit_codes.ERROR_NO_SUPERCELLS
+        
         self.ctx.mu_lst = niche_add_impurities(
             structure = self.ctx.structure.get_pymatgen_structure(), 
-            niche_atom = "H", 
+            niche_atom = niche_atom, 
             niche_spacing = self.inputs.mu_spacing.value, 
-            niche_distance = 1, # distance from hosting atoms.
+            niche_distance = 1, # distance from hosting atoms. Hardcoded.
         )
         
         if len(self.ctx.mu_lst) == 0:
-            self.report("No muon sites found. Exiting the workflow.")
+            self.report(f"No muon sites found using niche_atom '{niche_atom}'. Exiting the workflow.")
             return self.exit_codes.ERROR_NO_SUPERCELLS
-        else:
-            self.report(f"Number of muon sites found: {len(self.ctx.mu_lst)}")
-            
+        
+        self.report(f"Number of muon sites found using niche_atom '{niche_atom}': {len(self.ctx.mu_lst)}")
         return
     
     def get_initial_supercell_structures(self):
@@ -626,82 +814,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         input_struct = self.ctx.structure.get_pymatgen_structure()
         muon_list = self.ctx.mu_lst
 
-        self.ctx.supc_list = gensup(input_struct, muon_list, self.ctx.sc_matrix)  # ordinary function
+        self.ctx.supc_list = gensup(input_struct, muon_list, self.ctx.sc_matrix)
         if len(self.ctx.supc_list) == 0:
             self.report("No Supercells, please decrease the mu_spacing parameter. Exiting the workflow...")
             return self.exit_codes.ERROR_NO_SUPERCELLS
         
         self.ctx.supc_list = self.generate_supercells_list()
-
-    def setup_pw_overrides(self):
-        """Get the required overrides i.e pw parameter setup. STILL INCLUDED IN THE OUTLINE"""
-        '''
-        Miki Bonacci: I think that this overrides are no more needed once we have the MagneticStructureData.
-        Also, if we do this in a protocol, we can also tune it before the run, just in case.
-        Hubbard can be set by protocol, as we have the defaults. 
-        base_final_scf not needed because it is not currently used: but we can use its inputs to run the final scf with muon at the orgin? 
-        '''
-        self.report("Setting up the relaxation calculation")
-        overrides = {
-            #'final_scf' : orm.Bool(False),
-            "base": {
-                "kpoints_distance": orm.Float(self.inputs.kpoints_distance.value),
-                #"pseudo_family":self.inputs.pseudo_family,
-                "pw": {
-                    "parameters": {},
-                    "metadata": {},
-                },
-            },
-            #"base_final_scf": {
-            #    "pseudo_family": self.inputs.pseudo_family.value,
-            #},
-            "clean_workdir": orm.Bool(True),
-        }
-
-        ##TO DO:put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard
-
-        # set some cards
-        overrides["base"]["pw"]["parameters"] = recursive_merge(
-            overrides["base"]["pw"]["parameters"], {"CONTROL": {"nstep": 200}}
-        )
-        #overrides["base"]["pw"]["parameters"] = recursive_merge(overrides["base"]["pw"]["parameters"], {"CONTROL": {"etot_conv_thr": 1.0e-4}})
-        #overrides["base"]["pw"]["parameters"] = recursive_merge(overrides["base"]["pw"]["parameters"], {"CONTROL": {"forc_conv_thr": 1.0e-3}})   #less costlier instead of 1e-4 default
-        # overrides['base']['pw']['parameters'] = recursive_merge(overrides['base']['pw']['parameters'], {'SYSTEM':{'smearing': 'gaussian'}})
-        overrides["base"]["pw"]["parameters"] = recursive_merge(
-            overrides["base"]["pw"]["parameters"],
-            {"ELECTRONS": {"electron_maxstep": 500}},
-        )
-        overrides["base"]["pw"]["parameters"] = recursive_merge(
-            overrides["base"]["pw"]["parameters"], {"ELECTRONS": {"mixing_mode": "local-TF", "mixing_beta":0.3}}
-        )
-        # overrides['base']['pw']['parameters'] = recursive_merge(overrides['base']['pw']['parameters'], {'ELECTRONS':{'conv_thr': 1.0e-6}})
-        overrides["base"]["pw"]["metadata"] = recursive_merge(
-            overrides["base"]["pw"]["metadata"],
-            {
-                "description": "Muon site calculations for "
-                + self.inputs.structure.get_pymatgen_structure().formula
-            },
-        )
-        if hasattr(self.inputs,"charge_supercell"):
-        #
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"], {"SYSTEM": {"tot_charge": int(self.inputs.charge_supercell)}}
-            )
-        # if self.inputs.magmom is not None:
-        #MB this should be automatically done in the new implementation with the MagneticStructureData.
-        if "magmom" in self.inputs and self.ctx.start_mg_dict and self.inputs.spin_pol_dft:
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"], {"SYSTEM": {"nspin": 2}}
-            )
-            overrides["base"]["pw"]["parameters"] = recursive_merge(
-                overrides["base"]["pw"]["parameters"],
-                {
-                    "SYSTEM": {
-                        "starting_magnetization": self.ctx.start_mg_dict.get_dict()
-                    }
-                },
-            )
-        self.ctx.overrides = overrides
+        return
 
     def generate_supercells_list(self):
         """Generate the supercell list from pymatgen objects to 
@@ -732,50 +851,87 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         return new_supercell_list
 
+    def should_run_mlip_relaxation(self):
+        """Check if we should run MLIP relaxations.
+        """
+        if self.inputs.ML_pre_relax:
+            # Set context for ML relaxations
+            self.ctx.run_type = "ASE"
+            return True
+        
+        return False
+    
     def should_run_gamma_relaxations(self):
         """Check if we should run gamma relaxations.
-        """      
+        """
+
+        if self.inputs.gamma_pre_relax.value == False:
+            self.report("Skipping gamma pre-relaxation as specified in the inputs.")
+            return False
+
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
             
-        if not "kpoints_distance" in inputs.base:
+        if not "kpoints_distance" in base:
             self.report(f"Setting kpoints distance to be: {self.inputs.kpoints_distance.value}")
-            inputs.base.kpoints_distance = self.inputs.kpoints_distance
+            base.kpoints_distance = self.inputs.kpoints_distance
         
         mesh = create_kpoints_from_distance(
                     self.ctx.supc_list[0],
-                    orm.Float(inputs.base.kpoints_distance),
+                    orm.Float(base.kpoints_distance),
                     orm.Bool(False),
                     metadata={"store_provenance": False},
                 ).get_kpoints_mesh()
     
         if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
             self.report("We don't need a Gamma point pre-relaxation, Gamma is anyway the only sampled point.")
-            self.ctx.set_gamma_only = True # so we set gamma point only... in the dft runs
+            self.ctx.set_gamma_only = not self.ctx.non_collinear # so we set gamma point only... in the dft runs
             return False
 
         if self.inputs.gamma_pre_relax:
+            # Set context for gamma relaxations
+            self.ctx.run_type = "gamma"
+            self.ctx.enforce_gamma = True
             return True
-        else:
-            return False
-    
-    def prepare_gamma_relaxations(self):
-        self.ctx.enforce_gamma = True
-        self.ctx.run_type = "gamma"
-        return
+        
+        return False
     
     def should_run_full_relaxations(self):
         """Check if we should run full relaxations.
         """
-        if self.inputs.skip_dft_relax:
+        if self.inputs.full_dft_relax.value == False:
             self.report("Skipping DFT relaxations as specified in the inputs.")
             return False
         
+        # Set context for full relaxations
+        self.ctx.run_type = "full"
+        self.ctx.enforce_gamma = False
         return True
 
-    def prepare_full_relaxations(self):
-        self.ctx.enforce_gamma = False
-        self.ctx.run_type = "full"
-        return
+    def should_pre_clustering(self):
+        """Check if we should analyze and recompute after relaxations."""
+        should_run_pre_clustering = self.inputs.pre_clustering.value and self.inputs.gamma_pre_relax.value
+        
+        if not should_run_pre_clustering and self.inputs.pre_clustering.value:
+            self.report("Pre-clustering is activated but gamma pre-relaxation is not activated. Pre-clustering will be skipped as it is only relevant after the gamma pre-relaxation step.")
+
+        if not hasattr(self.ctx, 'pre_clustering_done'): self.ctx.pre_clustering_done = False
+
+        if should_run_pre_clustering and self.ctx.pre_clustering_done:
+            self.report("Pre-clustering is activated but it has already been done after the gamma pre-relaxation step. Skipping pre-clustering.")
+            return False
+
+        return should_run_pre_clustering
+
+    def run_cluster_analysis(self):
+        # Always analyze the relaxed structures if full k-mesh relaxation, and optionally analyze and recompute if specified in the inputs for Gamma only and MLIPs.
+        if self.should_pre_clustering() and not self.ctx.pre_clustering_done:
+            self.analyze_relaxed_structures(mode='pre-clustering', d_tol=0.25)
+            self.ctx.pre_clustering_done = True
+        elif self.ctx.run_type == "full":
+            self.analyze_relaxed_structures(mode='full')
+        else:
+            self.report("Skipping pre-clustering of structures after pre-relaxation as specified in the inputs.")
     
     def submit_dft_relaxations(self, enforce_gamma=False):
         """Submit the DFT relaxations for each supercell.
@@ -784,14 +940,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         calculations.
         """
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
         
         gamma_only_suffix = ""
 
         if self.ctx.run_type == "gamma":
             # we use a looser convergence threshold for the gamma point pre-relaxation
-            relax_parameters = inputs.base.pw.parameters.get_dict()
+            relax_parameters = base.pw.parameters.get_dict()
             relax_parameters["CONTROL"]["forc_conv_thr"] = relax_parameters["CONTROL"]["forc_conv_thr"] * 50 # TODO: check if this is ok
-            inputs.base.pw.parameters = orm.Dict(dict=relax_parameters)
+            base.pw.parameters = orm.Dict(dict=relax_parameters)
         
         # Make sure we have a kpoints distance
         if enforce_gamma:
@@ -799,28 +956,38 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             #self.report("Enforcing gamma point only for the supercell relaxations.")
             mesh = orm.KpointsData()
             mesh.set_kpoints_mesh([1, 1, 1])
-            inputs.base.kpoints = mesh
+            base.kpoints = mesh
             gamma_only_suffix = "_gamma"
             self.report("Using gamma point only for the supercell relaxations.")
-            inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
-            if hasattr(inputs.base.pw.parallelization, "get_dict"):
-                if "npool" in inputs.base.pw.parallelization.get_dict():
-                    inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
+            if not self.ctx.non_collinear and not isinstance(self.ctx.supc_list[0], HubbardStructureData):
+                settings = base.pw.settings.get_dict() if hasattr(base.pw, "settings") else {}
+                settings["GAMMA_ONLY"] = True
+                base.pw.settings = orm.Dict(dict=settings)
+            else:
+                self.report("Non-collinear calculation detected or DFT+U calculation, not setting GAMMA_ONLY but a [1,1,1] mesh.")
+            if hasattr(base.pw, "parallelization"):
+                if "npool" in base.pw.parallelization.get_dict():
+                    base.pw.parallelization = orm.Dict(dict={k:v  for k,v in base.pw.parallelization.get_dict().items() if k != "npool"})
             
         elif self.ctx.set_gamma_only:
-            # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True
+            # in this case, we have Gamma as the only sampled point by default, so we set GAMMA_ONLY to True if it is not non-collinear.
             self.report("Using gamma point only for the supercell relaxations.")
-            inputs.base.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
-            if hasattr(inputs.base.pw, "parallelization"):
-                if "npool" in inputs.base.pw.parallelization.get_dict():
-                    inputs.base.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.base.pw.parallelization.get_dict().items() if k != "npool"})
+            if not self.ctx.non_collinear and not isinstance(self.ctx.supc_list[0], HubbardStructureData):
+                settings = base.pw.settings.get_dict() if hasattr(base.pw, "settings") else {}
+                settings["GAMMA_ONLY"] = True
+                base.pw.settings = orm.Dict(dict=settings)
+            else:
+                self.report("Non-collinear calculation detected or DFT+U calculation, not setting GAMMA_ONLY but a [1,1,1] mesh.")
+            if hasattr(base.pw, "parallelization"):
+                if "npool" in base.pw.parallelization.get_dict():
+                    base.pw.parallelization = orm.Dict(dict={k:v  for k,v in base.pw.parallelization.get_dict().items() if k != "npool"})
             
         for i_index in range(len(self.ctx.supc_list)):
 
             inputs.structure = self.ctx.supc_list[i_index]
             
             # we define the pseudos again (now we have the structure+H)
-            inputs.base.pw.pseudos = get_pseudos(
+            base.pw.pseudos = get_pseudos(
                 inputs.structure, self.inputs.pseudo_family.value
             )
             
@@ -845,6 +1012,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         the structure is HubbardStructureData if needed.
         """
 
+        cycle_type = self.ctx.run_type
+        self.report(f"Starting {cycle_type} relaxation cycle")
+
         self.report("Computing muon supercells")
         self.ctx.supc_list = self.generate_supercells_list()
         
@@ -854,14 +1024,39 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         elif self.ctx.run_type == "full":
             self.report("Running DFT relaxations")
             self.submit_dft_relaxations(enforce_gamma=False)
-        elif self.ctx.run_type == "ML":
+        elif self.ctx.run_type == "ASE":
             self.report("Running ML relaxations")
-            self.run_machine_learning_relaxations()    
+            self.submit_ase_relaxations()    
         
         return
 
-    def run_machine_learning_relaxations(self):
-        raise NotImplementedError("Machine learning relaxations not implemented yet.")
+    def submit_ase_relaxations(self):
+        if not HAS_PYTHONJOB:
+            raise ImportError(
+                'aiida-pythonjob is required for ML relaxations. '
+                'Install it with: pip install aiida-pythonjob'
+            )
+
+        inputs = AttributeDict(self.exposed_inputs(PythonJob, namespace='pythonjob'))
+        
+        suffix = "_ase"
+
+        for i_index in range(len(self.ctx.supc_list)):
+
+            inputs.function_inputs.atoms = self.ctx.supc_list[i_index]
+            
+            # Set the `CALL` link label and submission
+            inputs.metadata.call_link_label = f'supercell_{i_index:02d}' + suffix
+            future = self.submit(PythonJob, **inputs)
+            # key = f'workchains.sub{i_index}' #nested sub
+            key = f"workchain_{i_index}"
+            self.report(
+                f"Launching PythonJob (PK={future.pk}) for supercell structure {self.ctx.supc_list[i_index].get_formula()} with index {i_index}" \
+                    + suffix
+            )
+            self.to_context(**{key: future})
+        
+        return
     
     def collect_relaxed_structures(self):
         """Retrieve final positions and energy from the relaxed structures.        
@@ -886,7 +1081,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             # checking failed calculations and exiting if more than 40% failed
             if not workchain.is_finished_ok:
                 self.report(
-                    f"PwRelaxWorkChain failed with exit status {workchain.exit_status}"
+                    f"Relaxation calculation {i_index} failed with exit status {workchain.exit_status}"
                 )
                 n_notf += 1
                 # if failed calculation is more than 40%, then exit
@@ -895,11 +1090,20 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             else:
                 self.ctx.n = i_index+self.ctx.offset
                 uuid = workchain.uuid
-                energy = workchain.outputs.output_parameters.get_dict()["energy"]
-                rlx_structure = (
-                    workchain.outputs.output_structure.get_pymatgen_structure()
-                )
-                new_supercell_list.append(workchain.outputs.output_structure)
+                if workchain.process_class in [LegacyPwRelaxWorkChain, PwRelaxWorkChain]:
+                    energy = workchain.outputs.output_parameters.get_dict()["energy"]
+                    rlx_structure = (
+                        workchain.outputs.output_structure.get_pymatgen_structure()
+                    )
+                    new_supercell_list.append(workchain.outputs.output_structure)
+                elif 'pythonjob' in workchain.process_type:
+                    energy = workchain.outputs.energy.value
+                    rlx_structure =  (
+                        workchain.outputs.structure.get_pymatgen_structure()
+                    )
+                    new_supercell_list.append(workchain.outputs.structure)
+                else:
+                    raise ValueError(f"Unknown workchain type: {workchain.process_type} for uuid={uuid}.")
 
                 # computed_results.append((pk,rlx_structure,energy))
                 computed_results.append(
@@ -916,6 +1120,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 # print(computed_results)
 
         self.ctx.relaxed_outputs = computed_results
+
         self.ctx.supc_list = new_supercell_list
         if len(supercell_list)!= len(new_supercell_list):
             self.report(
@@ -924,7 +1129,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
         return
     
-    def analyze_relaxed_structures(self):
+    def analyze_relaxed_structures(self, mode='pre-clustering', d_tol = 0.5):
         """Analyze relaxed structures.
         
         Get unique candidate sites and check if there are 
@@ -933,11 +1138,13 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         
         Basically, this represents the clustering step.
         Different algorithm could in principle be implemented.
+
+        NB: here we should put the choice of the thresholds for clustering, at least for the different methods (k-mesh, Gamma, MLIPs).
         """
         self.report("Analyzing the relaxed structures")
         inpt_st = self.ctx.structure.get_pymatgen_structure()
 
-        if "magmom" in self.ctx:
+        if "magmom" in self.ctx and mode!='pre-clustering':
             r_anly = analyze_structures(
                 self.ctx.supc_list[0],
                 self.ctx.relaxed_outputs,
@@ -946,34 +1153,53 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             )
         else:
             r_anly = analyze_structures(
-                self.ctx.supc_list[0], self.ctx.relaxed_outputs, inpt_st
+                self.ctx.supc_list[0], self.ctx.relaxed_outputs, inpt_st, d_tol = d_tol
             )
 
         self.ctx.unique_cluster = r_anly["unique_pos"]
+        self.ctx.cluster_mapping = r_anly["mapping"]
+        self.report(f"Mapping of relaxed structures to unique clusters: {self.ctx.cluster_mapping}")
+        self.report(f"Unique clusters found: {len(self.ctx.unique_cluster)} out of {len(self.ctx.relaxed_outputs)} relaxed structures.")
+        
         # print('uniq_positions',self.ctx.unique_cluster)
 
         # revisit, this so the initial inputs and collected results are not ovewritten with repeated calls in outline
         self.ctx.supc_list_all = self.ctx.supc_list
         self.ctx.relaxed_outputs_all = self.ctx.relaxed_outputs
 
-        self.ctx.supc_list = r_anly["mag_inequivalent"]
+        if mode == 'pre-clustering':
+            # cluster_mapping holds 1-based cluster IDs, not list indices.
+            # Pick the index of the first structure for each unique cluster ID.
+            seen = {}
+            for idx, cid in enumerate(self.ctx.cluster_mapping):
+                if cid not in seen:
+                    seen[cid] = idx
+            self.ctx.supc_list = [self.ctx.supc_list_all[i] for i in seen.values()]
+            self.report(f"Number of unique clusters found: {len(self.ctx.unique_cluster)}, out of {len(self.ctx.relaxed_outputs)} relaxed structures.")
+        else:
+            self.ctx.supc_list = r_anly["mag_inequivalent"]
+            if len(self.ctx.supc_list) > 0:
+                self.ctx.has_magnetic_inequivalent = True
 
     def new_struct_after_analyze(self):
-        """Check if there is new magnetic inequivalent sites"""
+        """Check if there is new magnetic inequivalent sites. This is done only in the full mesh relaxation."""
         self.report(f"Checking new structures to calculate... {len(self.ctx.supc_list) > 0}")
 
         if len(self.ctx.supc_list) > 0:
             self.ctx.run_type = "full"
-            self.ctx.offset = len(self.ctx.relaxed_outputs_all)  # offset for the supercell index if we find magnetic inequivalent sites.
+            self.ctx.offset = len(self.ctx.relaxed_outputs_all) if self.ctx.has_magnetic_inequivalent else 0  # offset for the supercell index if we find magnetic inequivalent sites.
             return True
         return False
 
     def collect_all_results(self):
         """Collecting results of new structures and then append"""
         self.report("Appending results of new structures ")
-
-        self.ctx.relaxed_outputs_all.extend(self.ctx.relaxed_outputs)
-        self.ctx.unique_cluster.extend(self.ctx.relaxed_outputs)
+        if not hasattr(self.ctx, "relaxed_outputs_all"):
+            self.ctx.relaxed_outputs_all = []
+            self.ctx.relaxed_outputs_all.extend(self.ctx.relaxed_outputs)
+        if not hasattr(self.ctx, "unique_cluster"):
+            self.ctx.unique_cluster = []
+            self.ctx.unique_cluster.extend(self.ctx.relaxed_outputs)
 
     def structure_is_magnetic(self):
         """Checking if structure is magnetic"""
@@ -996,6 +1222,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     def run_final_scf_mu_origin(self):
         """Move muon to origin and perform scf"""
         unique_cluster_list = self.ctx.unique_cluster
+        self.report(f"Running final SCF calculations with muon at the origin for the {len(unique_cluster_list)} unique clusters.")
         
         inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace='pwscf'))
         inputs_pw = inputs["pw"]["parameters"].get_dict()
@@ -1006,7 +1233,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         #inputs.kpoints_distance = orm.Float(inputs.kpoints_distance.value - 0.1) #denser reciprocal space grid 
 
         if self.ctx.set_gamma_only:
-            inputs.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+            settings = inputs.pw.settings.get_dict() if hasattr(inputs.pw, "settings") else {}
+            settings["GAMMA_ONLY"] = True
+            inputs.pw.settings = orm.Dict(dict=settings)
             if hasattr(inputs.pw, "parallelization"):
                 if "npool" in inputs.pw.parallelization.get_dict():
                     inputs.pw.parallelization = orm.Dict(dict={k:v  for k,v in inputs.pw.parallelization.get_dict().items() if k != "npool"})
@@ -1054,7 +1283,9 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                 ).get_kpoints_mesh()
     
             if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
-                inputs.pw.settings = orm.Dict(dict={"GAMMA_ONLY": True})
+                settings = inputs.pw.settings.get_dict() if hasattr(inputs.pw, "settings") else {}
+                settings["GAMMA_ONLY"] = True
+                inputs.pw.settings = orm.Dict(dict=settings)
             
             # Set the `CALL` link label and submit
             inputs.metadata.call_link_label = f'mu_origin_supercell_{j_index:02d}'
@@ -1079,9 +1310,15 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         if hasattr(self.inputs,"pp_metadata"):
             pp_builder.metadata = self.inputs.pp_metadata #.get_dict()
         #MB: the following should not be done, but for aiidalab qe app we need intranode only:
-        if pp_builder.metadata['options']['resources']['num_machines'] > 1:
-            pp_builder.metadata['options']['resources']['num_machines'] = 1
-
+        if pp_builder.metadata.get("options",{}).get("resources",{}).get("num_machines",1) > 1:
+            if pp_builder.metadata['options']['resources']['num_machines'] > 1:
+                pp_builder.metadata['options']['resources']['num_machines'] = 1
+        else:
+            pp_builder.metadata['options']['resources'] = {
+                "num_machines": 1,
+                "num_mpiprocs_per_machine": pp_builder.metadata.get("options",{}).get("resources",{}).get("num_mpiprocs_per_machine", 1),
+            }
+            pp_builder.metadata['options']['max_wallclock_seconds'] = pp_builder.metadata.get("options",{}).get("max_wallclock_seconds", 3600)
         parameters = orm.Dict(
             dict={
                 "INPUTPP": {
@@ -1231,7 +1468,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
 
 
 #################################################################################
-# calcfunctions and called functions
+# helper (calc-) functions
 
 def get_pseudos(aiida_struc, pseudofamily):
     """Get pseudos"""
@@ -1262,13 +1499,18 @@ def get_dict_output(outdata):
 
 
 #Creates the default used in the protocols and in the forcing inputs step.
-def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft):
-    
+def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft, noncollinear=False,):
+    """
+    Here, the noncollinear is used to not set the nspin parameter in the overrides.
+    FOR NOW: we set the non colin params in the overrides provided by the user. It is a bit involved, but it is temporary solution!
+    """
+
+
     formula = structure.get_formula()
     
     _overrides = {
            "base": {
-                #"pseudo_family": pseudo_family,
+                "pseudo_family": pseudo_family,
                 "kpoints_distance": kpoints_distance,
                 "pw": {
                     "parameters": {
@@ -1294,14 +1536,14 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
                 },
                 },
             },
-            #"base_final_scf": {"pseudo_family": pseudo_family,},
+            "base_final_scf": {"pseudo_family": pseudo_family,},
             "clean_workdir": orm.Bool(True),
         }
 
     if charge_supercell:
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 1.0
         
-    if magmom:
+    if magmom and not noncollinear:
         rst_mg = make_collinear_getmag_kind(
             structure, magmom,
         )
@@ -1321,9 +1563,10 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
             structure = create_hubbard_structure(new_structure, old_structure)
         else:
             structure = new_structure
-            
+        
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["nspin"]= 2
         _overrides["base"]["pw"]["parameters"]["SYSTEM"]["starting_magnetization"] = start_mg_dict.get_dict()
+        
     else:
         start_mg_dict = None
     
@@ -1334,21 +1577,13 @@ def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercel
     }
     # switch off charge in the pre_relax:
     _overrides["impuritysupercellconv"]["pre_relax"]["base"]["pw"]["parameters"]["SYSTEM"]["tot_charge"] = 0
-        
-        
-    
-    
-    
-    '''# HUBBARD
-    # check and assign hubbard u
-    inpt_st = structure.get_pymatgen_structure()
-    ##TO DO:put a check on  parameters that cannot be set by hand in the overrides eg mag, hubbard.
-    rst_u = check_get_hubbard_u_parms(inpt_st)
-    hubbardu_dict = rst_u 
-    if hubbardu_dict and hubbard:
-        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u"] = True
-        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["lda_plus_u_kind"] = 0
-        _overrides["base"]["pw"]["parameters"]["SYSTEM"]["Hubbard_U"] = hubbardu_dict'''
+
+    # Mirror "base" to "base_relax" so both the legacy PwRelaxWorkChain (key: "base")
+    # and the new PoweredPwRelaxWorkChain (key: "base_relax") can pick up the right key.
+    _overrides["base_relax"] = copy.deepcopy(_overrides["base"])
+    _overrides["impuritysupercellconv"]["pre_relax"]["base_relax"] = copy.deepcopy(
+        _overrides["impuritysupercellconv"]["pre_relax"]["base"]
+    )
         
     return _overrides, start_mg_dict, structure, magmom
 
@@ -1378,16 +1613,7 @@ def recursive_consistency_check(input_dict,_):
     _overrides, start_mg_dict, structure = get_override_dict(parameters["structure"],parameters["pseudo_family"], parameters["kpoints_distance"], parameters["charge_supercell"],parameters.pop('magmom',None),parameters.pop("spin_pol_dft",None))
     
     inconsistency_sentence = ''
-    
-    '''#Hubbard validation in the structure:
-    hubbard_params = check_get_hubbard_u_parms(structure.get_pymatgen())
-    if hubbard_params is not None:
-        if "hubbard" not in structure.get_defined_properties() or structure.hubbard.parameters == []:
-            if structure.is_stored:
-                inconsistency_sentence+="The structure you provided as input is stored but requires hubbard parameters. Please define a new StructureData instance with also hubbard parameters according to this: \n{hubbard_params}."
-            else:
-                inconsistency_sentence+="The structure you provided as input requires hubbard parameters. Please define hubbard parameters according to this: \n{hubbard_params}."'''
-        
+
     #QE inputs validation:
     keys = ["tot_charge","nspin","occupations","smearing"]
     
@@ -1399,9 +1625,17 @@ def recursive_consistency_check(input_dict,_):
         impuritysupercellconv_inconsistency = impuritysupercellconv_input_validator(parameters["impuritysupercellconv"],None,caller="FindMuonWorkchain")
     
     if impuritysupercellconv_inconsistency: inconsistency_sentence += impuritysupercellconv_inconsistency
-    
-    if parameters["relax"]["base"]["pw"]["parameters"].get_dict()["CONTROL"]["calculation"] != 'relax':
-        inconsistency_sentence+=f'Checking inputs.relax.base.pw.parameters.CONTROL.calculation: can be only "relax". No cell relaxation should be performed.'
+
+    # Support both the new "base_relax" key and the legacy "base" key.
+    if "base_relax" in parameters["relax"]:
+        base_key = "base_relax"
+    elif "base" in parameters["relax"]:
+        base_key = "base"
+    else:
+        raise ValueError("Neither 'relax.base_relax' nor 'relax.base' found in inputs.")
+
+    if parameters["relax"][base_key]["pw"]["parameters"].get_dict()["CONTROL"]["calculation"] != 'relax':
+        inconsistency_sentence+=f'Checking inputs.relax.{base_key}.pw.parameters.CONTROL.calculation: can be only "relax". No cell relaxation should be performed.'
     
     
     if 'base_final_scf' in parameters['relax']:
@@ -1422,14 +1656,14 @@ def recursive_consistency_check(input_dict,_):
             inconsistency_sentence+=f'Checking inputs: "pp_metadata" input not provided but required!'
         
     for key in keys:
-        value_input_relax = iterdict(parameters["relax"]["base"]["pw"]["parameters"].get_dict(),key)
+        value_input_relax = iterdict(parameters["relax"][base_key]["pw"]["parameters"].get_dict(),key)
         value_overrides = iterdict(_overrides,key)
         #print(value_input_relax,value_input_pwscf,value_overrides)
         if value_input_relax != value_overrides:
             if value_input_relax in [0, None] and value_overrides in [0, None]:
                 continue # 0 is None and viceversa
             wrong_inputs_relax.append(key)
-            inconsistency_sentence += f'Checking inputs.relax.base.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_relax}", but only "{value_overrides}" is consistent with your settings.\n'
+            inconsistency_sentence += f'Checking inputs.relax.{base_key}.pw.parameters input: "{key}" is not correct. You provided the value "{value_input_relax}", but only "{value_overrides}" is consistent with your settings.\n'
         
         if "pwscf" in parameters: #mu scf origin.
             value_input_pwscf = iterdict(parameters["pwscf"]["pw"]["parameters"].get_dict(),key)

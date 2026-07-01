@@ -3,6 +3,8 @@ __pycache__/
 __pycache__/*
 *.py[cod]
 *$py.class
+workflows/__pycache__/
+workflows/__pycache__/*
 
 # C extensions
 *.so
