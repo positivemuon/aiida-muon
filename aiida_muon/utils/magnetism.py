@@ -2,9 +2,9 @@
 import numpy as np
 import typing as t 
 
-from muesr.core import Sample
-from muesr.core.atoms import Atoms
-from muesr.engines.clfc import find_largest_sphere, locfield
+from pylocfield.ewald import compute_dipolar_tensors, compute_field as ewald_sum
+from pylocfield.realspace import compute_field as direct_sum
+
 from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
@@ -179,64 +179,47 @@ def compute_dip_field(p_st, magm, sc_mat, r_supst, cnt_field):
 
     # Gen supercell fourier comp. mag moments in complex form
     momt = p_scst.site_properties["magmom"]
-    fc_sup = np.zeros([len(momt), 3], dtype=complex)
+    fc_sup = np.zeros([len(momt), 1, 3], dtype=complex)
     for i, m in enumerate(momt):
         # fc_sup[i] = m.get_moment_relative_to_crystal_axes(p_scst.lattice).astype(complex)
-        fc_sup[i] = m.get_moment().astype(complex)
+        fc_sup[i, 0, :] = m.get_moment().astype(complex)
 
     # get the s_axis for transforming the contact field that is isotropic
     s_axis = Magmom.get_suggested_saxis(momt)
 
-    # start dipolar calculations
-
-    smp = Sample()
+    #### start dipolar calculations
 
     # get structure from pymatgen-->ase_atoms-->Muesr_atoms
-    ase_atom = AseAtomsAdaptor.get_atoms(p_scst)
-    # smp.cell = ase_atom  #raise TypeError('Cell is invalid.') for MnO.mcif
-    atoms = Atoms(
-        symbols=ase_atom.symbols,
-        scaled_positions=ase_atom.get_scaled_positions(),
-        cell=ase_atom.cell,
-        pbc=True,
-    )
-    smp.cell = atoms
-
-    smp.new_mm()
-    smp.mm.k = np.array([0.0, 0.0, 0.0])
-    # smp.mm.fc_set(fc_sup, coord_system=2)
-    smp.mm.fc = fc_sup
+    pristine_scst = AseAtomsAdaptor.get_atoms(p_scst)
+    pristine_scst.info["q"] = np.array([ [0.0, 0.0, 0.0] ])
+    pristine_scst.set_array("fc", 0.5*fc_sup)
 
     # smp.add_muon(musite+0.5-musite)
-    smp.add_muon([0.5, 0.5, 0.5])
+    pristine_scst.info["mu"] = np.array([[0.5, 0.5, 0.5]])
     # smp.current_mm_idx=0
-    radius = find_largest_sphere(smp, [50, 50, 50])
 
-    # compute B in full(50x50x50 supercell) in the pristine structre
-    r_f_ps = locfield(smp, "s", [50, 50, 50], radius)
+    # Compute dipolar tensors with Ewald method
+    compute_dipolar_tensors(pristine_scst)
+    
+    r_f_ps = ewald_sum(pristine_scst)
 
     # compute B only within the supercell  using the pristine structre,
     # To include muon induced relaxation effects
     radius_n = np.min(r_supst.lattice.abc)
-    r_s_ps = locfield(smp, "s", [50, 50, 50], radius_n)
+    #r_s_ps = locfield(smp, "s", [50, 50, 50], radius_n)
+    r_s_ps = direct_sum(pristine_scst, r_c=radius_n)
 
     # change the cell to the relaxed
-    # smp.cell = AseAtomsAdaptor.get_atoms(r_supst)
-    ase_atom_r = AseAtomsAdaptor.get_atoms(r_supst)
-    atoms_r = Atoms(
-        symbols=ase_atom_r.symbols,
-        scaled_positions=ase_atom_r.get_scaled_positions(),
-        cell=ase_atom_r.cell,
-        pbc=True,
-    )
-    smp.cell = atoms_r
+    relaxed_scst = AseAtomsAdaptor.get_atoms(r_supst)
+    relaxed_scst.info["q"] = np.array([ [0.0, 0.0, 0.0] ])
+    relaxed_scst.set_array("fc", 0.5*fc_sup)
+    relaxed_scst.info["mu"] = np.array([[0.5, 0.5, 0.5]])
 
     # compute B only within the supercell the using the relaxed structre
-    r_s_rlx = locfield(smp, "s", [50, 50, 50], radius_n)
+    r_s_rlx = direct_sum(relaxed_scst, r_c=radius_n)
 
     # B (B_dip+B_lor) vector with muon distortion effects in tesla (https://doi.org/10.1016/j.cpc.2022.108488)
-    B_D = r_f_ps[0].D + r_s_rlx[0].D - r_s_ps[0].D
-    B_DL = B_D + r_f_ps[0].L
+    B_DL = r_f_ps[0,0] + r_s_rlx[0,0] - r_s_ps[0,0]
 
     return (
         B_DL,
