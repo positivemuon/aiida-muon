@@ -1,9 +1,5 @@
 # -*- coding: utf-8 -*-
 import numpy as np
-from muesr.core import Sample
-from muesr.core.atoms import Atoms
-from muesr.engines.clfc import find_largest_sphere, locfield
-from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
 from pymatgen.io.ase import AseAtomsAdaptor
