@@ -587,7 +587,8 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             builder.sc_matrix=orm.List(sc_matrix)
         
         builder.pwscf = builder_pwscf
-        builder.relax = builder_relax        
+        builder.relax = builder_relax  
+          
         
         # If magmoms are defined, we need to set the spin_pol_dft to True
         if start_mg_dict: 
@@ -853,6 +854,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
             return False
 
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
             
         if not "kpoints_distance" in inputs.base_relax:
             self.report(f"Setting kpoints distance to be: {self.inputs.kpoints_distance.value}")
@@ -922,6 +924,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         calculations.
         """
         inputs = AttributeDict(self.exposed_inputs(PwRelaxWorkChain, namespace='relax'))
+        base = inputs['base_relax'] if 'base_relax' in inputs else inputs['base']
         
         gamma_only_suffix = ""
 
@@ -1480,7 +1483,7 @@ def get_dict_output(outdata):
 
 
 #Creates the default used in the protocols and in the forcing inputs step.
-def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft, noncollinear=False):
+def get_default_dict(structure, pseudo_family, kpoints_distance, charge_supercell,magmom, spin_pol_dft, noncollinear=False,):
     """
     Here, the noncollinear is used to not set the nspin parameter in the overrides.
     FOR NOW: we set the non colin params in the overrides provided by the user. It is a bit involved, but it is temporary solution!
