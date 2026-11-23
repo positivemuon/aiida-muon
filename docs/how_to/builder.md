@@ -55,17 +55,17 @@ This already sets:
 | `ML_pre_relax` | `bool` | `False` | (experimental) MLIP pre-relaxation before DFT |
 | `full_dft_relax` | `bool` | `True` | Run the full DFT relaxation step |
 | `pre_clustering` | `bool` | `False` | Cluster after each pre-relaxation step to further reduce site count |
-| `activate_monitors` | `bool` | `True` | Attach monitors to relaxation steps (requires `aiida-monitor`) |
-| `monitor_entry_point_list` | `list` | `[]` | Additional `aiida-monitor` entry-point strings to attach |
+| `activate_monitors` | `bool` | `True` | Attach the QE accuracy-stuck monitor and any additional monitors |
+| `monitor_entry_point_list` | `list` | `[]` | Additional registered monitor entry-point strings to attach |
 
 ---
 
 ## Runtime monitors
 
-When [`aiida-monitor`](https://github.com/mikibonacci/aiida-monitor) is installed,
-`get_builder_from_protocol` automatically attaches `aiida_monitor.default_monitor`
-to every `PwBaseWorkChain` relaxation call.  This monitor can detect stalled or
-hung calculations and terminate them gracefully so the workflow can continue.
+`get_builder_from_protocol` automatically attaches the
+`quantumespresso.accuracy_stuck` monitor from `aiida-quantumespresso` to every
+`PwBaseWorkChain` relaxation call. It detects when QE's accuracy stops improving;
+the work chain responds by lowering `IONS.upscale` and restarting the calculation.
 
 The behaviour is controlled by two parameters:
 
@@ -88,12 +88,9 @@ builder = FindMuonWorkChain.get_builder_from_protocol(
 
 | Parameter | Effect |
 |---|---|
-| `activate_monitors=True` (default) | `aiida_monitor.default_monitor` is appended automatically if `aiida-monitor` is installed |
+| `activate_monitors=True` (default) | `quantumespresso.accuracy_stuck` is appended automatically |
 | `activate_monitors=False` | No monitors are set, even if `monitor_entry_point_list` is non-empty |
-| `monitor_entry_point_list=[...]` | Additional monitors attached alongside (or instead of) the default |
-
-If `aiida-monitor` is **not** installed the builder silently skips monitor
-attachment — the workflow runs normally.
+| `monitor_entry_point_list=[...]` | Additional registered monitors attached alongside the default |
 
 ---
 

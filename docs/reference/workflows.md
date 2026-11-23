@@ -69,7 +69,7 @@ FindMuonWorkChain = WorkflowFactory('muon.find_muon')
 
 | Namespace | Workflow | Description |
 |---|---|---|
-| `relax` | `PoweredPwRelaxWorkChain` | DFT relaxation inputs (k-points, cutoffs, etc.) |
+| `relax` | `PwRelaxWorkChain` | DFT relaxation inputs (k-points, cutoffs, etc.) |
 | `pwscf` | `PwBaseWorkChain` | Final SCF for hyperfine; excludes `structure` and `kpoints` |
 | `impuritysupercellconv` | `IsolatedImpurityWorkChain` | Supercell convergence; only used when `sc_matrix` is not given |
 | `pythonjob` | `PythonJob` | MLIP relaxation via aiida-pythonjob (experimental) |

@@ -25,11 +25,9 @@ This installs the core package together with its required dependencies:
 
 | Dependency | Purpose |
 |---|---|
-| `aiida-core >=2.0` | AiiDA engine and ORM |
-| `aiida-quantumespresso >=4.2` | QE plugin (PwRelaxWorkChain, etc.) |
+| `aiida-core >=2.8,<3` | AiiDA engine and ORM |
+| `aiida-quantumespresso ~=5.0` | QE plugin, relaxation restarts, and the accuracy-stuck monitor |
 | `aiida-impuritysupercellconv` | Automated supercell size convergence |
-| `aiida-qe-restart` | Robust QE restart handling |
-| `aiida-monitor` | Optional job monitoring |
 | `pymatgen` | Structure manipulation and symmetry analysis |
 | `muesr` / `muLFC` | Dipolar field computation |
 

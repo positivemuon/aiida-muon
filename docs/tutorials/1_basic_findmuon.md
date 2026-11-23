@@ -85,10 +85,10 @@ builder.relax.base.pw.metadata.options = {
 ```
 
 !!! tip "Runtime monitors"
-    When [`aiida-monitor`](https://github.com/mikibonacci/aiida-monitor) is installed,
-    a default monitor is attached automatically to each relaxation step and can kill
-    stalled calculations so the workflow keeps running.  Pass
-    `activate_monitors=False` to `get_builder_from_protocol` to disable this.
+    The `quantumespresso.accuracy_stuck` monitor from `aiida-quantumespresso` is
+    attached automatically to each relaxation step. It detects when QE's accuracy
+    stops improving, allowing the work chain to lower `IONS.upscale` and restart.
+    Pass `activate_monitors=False` to `get_builder_from_protocol` to disable it.
 
 ### BCC Iron (collinear ferromagnet)
 

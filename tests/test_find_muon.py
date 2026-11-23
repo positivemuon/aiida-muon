@@ -32,9 +32,9 @@ def generate_builder(generate_structure, fixture_code):
             "SYSTEM": {"ecutwfc": 30.0, "ecutrho": 240.0},
             "ELECTRONS": {"conv_thr": 1.0e-4},
         })
-        builder.relax.base.pw.code = code
-        builder.relax.base.pw.parameters = pw_params
-        builder.relax.base.pw.metadata.options.resources = {"num_machines": 1}
+        builder.relax.base_relax.pw.code = code
+        builder.relax.base_relax.pw.parameters = pw_params
+        builder.relax.base_relax.pw.metadata.options.resources = {"num_machines": 1}
 
         return builder
 

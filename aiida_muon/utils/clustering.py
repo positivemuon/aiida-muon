@@ -243,7 +243,7 @@ def cluster_unique_sites(
     # Step 2
     mu_list20 = mu_list2.copy()
     ieq = find_equivalent_positions(
-        mu_list20, p_smag, s_tol, energies=enrg_list, e_tol=e_tol
+        mu_list20, p_smag, s_tol, energies=enrg_list2, e_tol=e_tol
     )
     mu_list3 = mu_list2[ieq == np.arange(len(mu_list2))]
     enrg_list3 = enrg_list2[ieq == np.arange(len(enrg_list2))]

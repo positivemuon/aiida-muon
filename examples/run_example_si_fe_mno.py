@@ -76,7 +76,7 @@ if system == "MnO":
 builder = FindMuonWorkChain.get_builder_from_protocol(**kwargs)
 
 # Adjust scheduler options to match your cluster
-builder.relax.base.pw.metadata.options = {
+builder.relax.base_relax.pw.metadata.options = {
     'resources': {'num_machines': 1, 'num_mpiprocs_per_machine': 4},
     'max_wallclock_seconds': 7200,
 }
