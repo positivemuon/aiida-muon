@@ -92,7 +92,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
     7. **Hyperfine and dipolar fields** (magnetic materials only) – a final SCF
        calculation places the muon at the origin (``PwBaseWorkChain``); the
        contact hyperfine field is evaluated from the spin density via ``pp.x``,
-       and the classical dipolar field is computed with ``muesr``.
+       and the classical dipolar field is computed with ``pylocfield``.
 
     Monitor support
     ---------------

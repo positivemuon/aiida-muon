@@ -157,18 +157,19 @@ def produce_muonic_dataframe(
     - ``supercell_index`` (int; also the name of the index of the tables): the identifier of the relaxation, i.e. the
       key of the site in the ``all_index_uuid``, ``all_sites`` and ``unique_sites`` outputs of the ``FindMuonWorkChain``.
       It is *not* a position, and it is unrelated to the order of the table, to ``label`` and to the energy.
-    - ``atom_index_in_unit_cell`` (int, 0-based): the index of the muon *atom* in the unit cell with all the muon
-      sites, i.e. in ``exported["unit_cell"]`` for the table of the unique sites and in ``exported["unit_cell_all"]``
-      for the table of all the sites (see :func:`produce_collective_unit_cell`). It is the index to use with ASE or
-      with the structure viewer to pick the muon of that site.
+    - ``atom_index_in_unit_cell`` (int, **1-based**: the first atom is 1): the number of the muon *atom* in the unit
+      cell with all the muon sites, i.e. in ``exported["unit_cell"]`` for the table of the unique sites and in
+      ``exported["unit_cell_all"]`` for the table of all the sites (see :func:`produce_collective_unit_cell`).
+      ASE and Python are 0-based: to pick the muon with them use ``atom_index_in_unit_cell - 1``, e.g.
+      ``unit_cell.sites[atom_index_in_unit_cell - 1]``. Check whether your structure visualizer is 1-based too.
+      Note that ``supercell_index`` starts from 0 instead, as it is the key of the ``FindMuonWorkChain`` outputs.
     - ``label`` (str): a letter, assigned in order of increasing energy (``A`` is the lowest energy site).
       The sites that are not in the unique table get the following letters.
     - ``cluster group`` (only in the table of all the sites): the group of the clustering to which the site belongs.
     - ``structure_id_pk``: the pk of the relaxed supercell structure.
 
     :param include_deprecated_columns: also return the columns with the old names: ``muon_index`` (the
-        ``supercell_index``, as a string) and ``muon_index_global_unitcell`` (the ``atom_index_in_unit_cell``, but
-        1-based). They will be removed in a future release. Before the renaming, ``muon_index_global_unitcell`` was
+        ``supercell_index``, as a string) and ``muon_index_global_unitcell`` (the same as ``atom_index_in_unit_cell``). They will be removed in a future release. Before the renaming, ``muon_index_global_unitcell`` was
         computed from the position in ``all_index_uuid``, and in the table of the unique sites it was not
         the index of the muon in ``unit_cell`` when the clustering had removed sites.
     """
@@ -198,11 +199,12 @@ def produce_muonic_dataframe(
         """The columns that identify the site (and the deprecated ones)."""
         info = {
             SUPERCELL_INDEX: int(idx),
-            ATOM_INDEX_IN_UNIT_CELL: atom_index[idx],
+            # 1-based, as an atom number in a structure file; `atom_index` (a position in ASE) is 0-based.
+            ATOM_INDEX_IN_UNIT_CELL: atom_index[idx] + 1,
         }
         if include_deprecated_columns:
             info[DEPRECATED_MUON_INDEX] = idx
-            info[DEPRECATED_MUON_INDEX_GLOBAL_UNITCELL] = atom_index[idx] + 1
+            info[DEPRECATED_MUON_INDEX_GLOBAL_UNITCELL] = atom_index[idx] + 1  # same as ATOM_INDEX_IN_UNIT_CELL
         return info
 
     deprecated_columns = (
@@ -423,8 +425,9 @@ def export_findmuon_data(findmuon_output_node: orm.Node, include_deprecated_colu
     """Export the results of a ``FindMuonWorkChain`` as dataframes, distortions and structures.
 
     See :func:`produce_muonic_dataframe` for the meaning of the columns, and in particular of the two indexes
-    ``supercell_index`` and ``atom_index_in_unit_cell``. The latter is the index of the muon in ``unit_cell``
-    (table of the unique sites) or in ``unit_cell_all`` (table of all the sites).
+    ``supercell_index`` and ``atom_index_in_unit_cell``. The latter is the 1-based number of the muon in ``unit_cell``
+    (table of the unique sites) or in ``unit_cell_all`` (table of all the sites): use ``atom_index_in_unit_cell - 1``
+    to index ASE or ``sites``.
     """
     df, df_all, distortions = produce_muonic_dataframe(
         findmuon_output_node, include_deprecated_columns=include_deprecated_columns

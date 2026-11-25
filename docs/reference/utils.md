@@ -114,7 +114,19 @@ QE parameters.
 ### `compute_dipolar_field`
 
 Computes the classical dipolar field at each unique muon site using
-`muesr` / `muLFC`.  Called internally by `FindMuonWorkChain.get_dipolar_field`.
+`pylocfield`.  Called internally by `FindMuonWorkChain.get_dipolar_field`.
+
+### `get_ewald_cutoffs`
+
+```python
+r_c, g_c = get_ewald_cutoffs(cell)
+```
+
+The cutoffs of the Ewald sum of the dipolar field for the supercell `cell` (with the muon at its centre):
+`r_c` in Å for the real-space sum, `g_c` in Å$^{-1}$ (without the factor $2\pi$) for the reciprocal-space one. They are derived from the Ewald parameter
+`EWALD_RHO`, a tolerance of $10^{-10}$ and a safety factor of 1.5, and are 30–100 times smaller in cost than the
+defaults of `pylocfield` with the same result. See
+[why these cutoffs](../advanced/workflow_internals.md#ewald-cutoffs-of-the-dipolar-field-why-these-values).
 
 ---
 
@@ -164,12 +176,13 @@ Each row of a table is a muon site, identified by:
 
 - `supercell_index`: the id of its relaxation (the key in `all_index_uuid`, `all_sites`, `unique_sites`). It is also
   the named index of the tables. It is not a position.
-- `atom_index_in_unit_cell`: the 0-based index of its muon in `unit_cell` (for `table`) or `unit_cell_all` (for
-  `table_all`).
+- `atom_index_in_unit_cell`: the **1-based** number of its muon in `unit_cell` (for `table`) or `unit_cell_all` (for
+  `table_all`). Use `atom_index_in_unit_cell - 1` with ASE or `sites`, and check that your visualizer is 1-based.
+  (`supercell_index` starts from 0.)
 - `label`: a letter, in order of increasing energy.
 
 The old columns `muon_index` (now `supercell_index`) and `muon_index_global_unitcell` (now
-`atom_index_in_unit_cell`, 1-based) are returned too, for one release, unless `include_deprecated_columns=False`.
+`atom_index_in_unit_cell`, same values) are returned too, for one release, unless `include_deprecated_columns=False`.
 
 ### `get_clustering_after_run`
 

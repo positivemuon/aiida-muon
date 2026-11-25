@@ -100,13 +100,13 @@ def test_unit_cell_atom_indices_are_zero_based_after_the_host():
 def test_atom_indices_of_the_tables(fake_findmuon, patched_export):
     df, df_all, _ = ef.produce_muonic_dataframe(fake_findmuon)
 
-    # the unique sites: indexes in `unit_cell`, which only has these muons.
+    # the unique sites: 1-based numbers of the atoms of `unit_cell`, which only has these muons.
     unique_by_supercell = {int(row.supercell_index): row.atom_index_in_unit_cell for _, row in df.iterrows()}
-    assert unique_by_supercell == {0: N_HOST, 3: N_HOST + 1, 5: N_HOST + 2, 10: N_HOST + 3}
+    assert unique_by_supercell == {0: N_HOST + 1, 3: N_HOST + 2, 5: N_HOST + 3, 10: N_HOST + 4}
 
-    # all the sites: indexes in `unit_cell_all`.
+    # all the sites: 1-based numbers of the atoms of `unit_cell_all`.
     all_by_supercell = {int(row.supercell_index): row.atom_index_in_unit_cell for _, row in df_all.iterrows()}
-    assert all_by_supercell == {0: 8, 1: 9, 2: 10, 3: 11, 5: 12, 10: 13}
+    assert all_by_supercell == {0: 9, 1: 10, 2: 11, 3: 12, 5: 13, 10: 14}
 
     # the index of the table is the supercell index, and it is named
     assert df.index.name == df_all.index.name == "supercell_index"
@@ -128,9 +128,9 @@ def test_clustering_follows_the_order_of_all_sites(fake_findmuon, patched_export
 def test_deprecated_columns(fake_findmuon, patched_export):
     df, df_all, _ = ef.produce_muonic_dataframe(fake_findmuon)
     for table in (df, df_all):
-        # the old names are kept, with the old format: the index as a string, and the atom index as 1-based.
+        # the old names are kept, with the old format: the index as a string, and the same atom numbers (1-based).
         assert list(table["muon_index"]) == [str(i) for i in table["supercell_index"]]
-        assert list(table["muon_index_global_unitcell"]) == list(table["atom_index_in_unit_cell"] + 1)
+        assert list(table["muon_index_global_unitcell"]) == list(table["atom_index_in_unit_cell"])
 
     df, df_all, _ = ef.produce_muonic_dataframe(fake_findmuon, include_deprecated_columns=False)
     for table in (df, df_all):
@@ -140,14 +140,14 @@ def test_deprecated_columns(fake_findmuon, patched_export):
 
 @pytest.mark.parametrize("before_clustering", [False, True])
 def test_the_atom_index_is_the_muon_of_that_site(fake_findmuon, patched_export, aiida_profile, before_clustering):
-    """The invariant behind the column: the atom at `atom_index_in_unit_cell` is the muon of that site."""
+    """The invariant behind the column: atom number `atom_index_in_unit_cell` (1-based) is the muon of that site."""
     df, df_all, _ = ef.produce_muonic_dataframe(fake_findmuon)
     table = df_all if before_clustering else df
     unit_cell = ef.produce_collective_unit_cell(fake_findmuon, before_clustering=before_clustering)
 
     assert len(unit_cell.sites) == N_HOST + len(table)
     for _, row in table.iterrows():
-        atom = row.atom_index_in_unit_cell
+        atom = row.atom_index_in_unit_cell - 1  # 1-based in the table, 0-based in ASE
         assert unit_cell.tags[atom] == str(row.supercell_index)
         # (the kind name is `H<index>` plus what pymatgen makes of it, e.g. an oxidation state: only check the element)
         assert unit_cell.get_kind(unit_cell.sites[atom].kind_name).symbol == "H"

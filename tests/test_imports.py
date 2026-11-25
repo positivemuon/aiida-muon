@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
-"""aiida-muon does not depend on `muesr` and `mulfc` any more: nothing but the dipolar field needs them."""
+"""aiida-muon does not depend on `muesr` and `mulfc` any more (the dipolar field uses `pylocfield`)."""
 import subprocess
 import sys
-
-import pytest
 
 MODULES = [
     "aiida_muon.utils.clustering",
@@ -26,11 +24,3 @@ def test_modules_import_without_muesr_and_mulfc():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
 
-
-def test_dipolar_field_needs_muesr(monkeypatch):
-    """Without muesr, computing the dipolar field fails with a message that says what to do."""
-    from aiida_muon.utils.magnetism import compute_dip_field
-
-    monkeypatch.setitem(sys.modules, "muesr", None)
-    with pytest.raises(ImportError, match="muesr"):
-        compute_dip_field(None, None, None, None, None)

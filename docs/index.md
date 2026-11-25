@@ -71,7 +71,7 @@ symmetry-based clustering. For magnetic materials it also computes the **contact
   [aiida-impuritysupercellconv](https://github.com/positivemuon/aiida-impuritysupercellconv).
 - Symmetry-aware clustering of relaxed sites to identify unique candidate positions.
 - Contact hyperfine field from DFT spin density (pp.x) for magnetic systems.
-- Classical dipolar field computed with [muesr](https://github.com/bonfus/muesr).
+- Classical dipolar field computed with [pylocfield](https://github.com/bonfus/pylocfield).
 - Full AiiDA provenance: every intermediate result is stored in the database.
 
 ## How to cite

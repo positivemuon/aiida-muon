@@ -113,8 +113,66 @@ Only executed when `inputs.magmom` is present:
   density on a real-space grid.
 - **`compute_contact_hyperfine`** — evaluates the spin density at the muon
   position using the Fermi contact formula.
-- **`get_dipolar_field`** — computes the dipolar field with `muesr`.
+- **`get_dipolar_field`** — computes the dipolar field with `pylocfield`.
 - **`set_field_outputs`** — stores the hyperfine and dipolar results as outputs.
+
+### Ewald cutoffs of the dipolar field: why these values
+
+The dipolar field is computed by `compute_dip_field` (`aiida_muon.utils.magnetism`) with `pylocfield`. The sum over the
+infinite lattice is done with the Ewald method, in which the sum is split in two parts that converge quickly: one over
+real-space lattice vectors $\mathbf{R}$ and one over reciprocal-space lattice vectors $\mathbf{G}$. Each one is
+truncated with a cutoff, and `get_ewald_cutoffs` sets them from the cell.
+
+**Why not the defaults of `pylocfield`?** `compute_dipolar_tensors` uses `r_c = 12` Å and `g_c = 12` (the reciprocal
+vectors that are summed have length up to $2\pi g_c \approx 75$ Å$^{-1}$). This is very far beyond what is needed. The
+number of lattice vectors, and so the cost, grows as the cube of the cutoffs and with the volume of the cell, and
+the sum is repeated for each atom of the supercell. With the defaults, a 54-atoms bcc Fe supercell (3×3×3) takes about
+45 s and a 64-atoms MnO supercell about 25 s, while the former implementation took less than a second.
+
+**What is needed.** With the Ewald parameter $\rho$ (`rho`, 1.8 Å$^{-1}$, the default of `pylocfield`, passed
+explicitly), the terms of the sums are damped by Gaussians:
+
+| Sum | Terms | Negligible beyond |
+|---|---|---|
+| reciprocal space | $\propto e^{-|\mathbf{G}|^2/(4\rho^2)}$ | $G_\text{conv} = 2\rho\sqrt{\ln(1/\text{tol})}$ |
+| real space | $\propto e^{-(\rho r)^2}$ | $R_\text{conv} = \sqrt{\ln(1/\text{tol})}/\rho$ |
+
+With a relative tolerance of $10^{-10}$ ($\ln(1/\text{tol}) = 23.03$) this is $G_\text{conv} = 17.3$ Å$^{-1}$, i.e.
+$g_c = G_\text{conv}/2\pi = 2.75$, and $R_\text{conv} = 2.67$ Å. We multiply both by a **safety factor of 1.5**, so the
+neglected terms are of order $e^{-52}$ instead of $e^{-23}$.
+
+- **`g_c`** (reciprocal space) is $1.5 \times 2.75 = 4.12$. The reciprocal vectors do not depend on where the atoms
+  are, so this is all that is needed, for any cell.
+- **`r_c`** (real space) needs one more term. `r_c` selects *cells* $\mathbf{R}$, and all the atoms of a selected cell
+  are summed. The muon sits at the centre of the supercell, so an atom within $R_\text{conv}$ of the muon can be in
+  a cell whose $|\mathbf{R}|$ is as large as $R_\text{conv}$ plus the largest distance from the centre of a cell to
+  one of its points, i.e. half of its longest diagonal ($\mathbf{a}_1 \pm \mathbf{a}_2 \pm \mathbf{a}_3$). So
+  $r_c = 1.5\,R_\text{conv} + \tfrac12 \max|\mathbf{a}_1 \pm \mathbf{a}_2 \pm \mathbf{a}_3|$. With this, no atom that
+  matters is left out, whatever the shape or size of the supercell, and the extra cells make the real-space sum only
+  slightly longer. For a cubic supercell of 8.6 Å this gives $r_c \approx 11.5$ Å.
+
+**Check.** The result was compared with the one obtained with the defaults of `pylocfield`:
+
+| Supercell | Difference in $B_\text{dip+L}$ | Time with the defaults | Time with `get_ewald_cutoffs` |
+|---|---|---|---|
+| bcc Fe 3×3×3 (54 atoms) | $< 10^{-14}$ T | 43–85 s | 1.4 s |
+| MnO 2×2×2 (64 atoms), antiferromagnetic | $< 10^{-14}$ T | 25–42 s | 1.0 s |
+| hexagonal, tilted moments, 2×2×1 (oblique cell) | $3 \times 10^{-16}$ T | 4 s | 0.1 s |
+| bcc Fe 1×1×1, 2×2×1, 2×2×2 | $< 10^{-15}$ T | 0.1–3.5 s | 0.01–0.1 s |
+
+(Differences below $10^{-10}$ T are the round-off of the calculation; `tests/test_dipolar_field.py` requires
+$10^{-10}$ T.) With smaller cutoffs the error appears where the formulas predict it: it stays below $10^{-7}$ T for $g_c \ge 2.5$ and
+becomes $3 \times 10^{-5}$ T at $g_c = 2$ ($e^{-(2\pi g_c)^2/4\rho^2}$ is then about $10^{-5}$).
+
+**Difference from `muesr`.** The result differs from the one of the former implementation (`muesr`) by about
+$10^{-4}$ T on fields of 1–3 T (less than 0.01 %). This is not related to the cutoffs, since it does not change with
+them: it comes from the different summation methods.
+
+**If you change something.** If you change `rho`, the cutoffs follow (they are computed from it); if you change
+the tolerance or the safety factor, edit `EWALD_LOG_INVERSE_TOLERANCE` and `EWALD_SAFETY_FACTOR` in
+`aiida_muon/utils/magnetism.py`, where the same derivation is written as a comment, and run
+`tests/test_dipolar_field.py`, which compares the result with the former `muesr` values and with the default cutoffs
+of `pylocfield`.
 
 ### 8. `set_relaxed_muon_outputs`
 

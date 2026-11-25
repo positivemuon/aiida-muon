@@ -29,7 +29,7 @@ This installs the core package together with its required dependencies:
 | `aiida-quantumespresso ~=5.0` | QE plugin, relaxation restarts, and the accuracy-stuck monitor |
 | `aiida-impuritysupercellconv` | Automated supercell size convergence |
 | `pymatgen` | Structure manipulation and symmetry analysis |
-| `muesr` / `muLFC` | Dipolar field computation |
+| `pylocfield` | Dipolar field computation |
 
 !!! note "Quantum ESPRESSO version"
     `aiida-muon` requires Quantum ESPRESSO **≥ 7.1** because it depends on the
