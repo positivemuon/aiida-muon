@@ -2,9 +2,6 @@
 import numpy as np
 import typing as t 
 
-from muesr.core import Sample
-from muesr.core.atoms import Atoms
-from muesr.engines.clfc import find_largest_sphere, locfield
 from pymatgen.analysis.magnetism.analyzer import CollinearMagneticStructureAnalyzer
 from pymatgen.core import PeriodicSite, Structure
 from pymatgen.electronic_structure.core import Magmom
@@ -156,6 +153,18 @@ def compute_dip_field(p_st, magm, sc_mat, r_supst, cnt_field):
         The B_dip+B_L vectors, its norm and B_Total=B_dip+B_L +B_C vectors
 
     """
+
+    # muesr is not a dependency of aiida-muon: it is only needed here, so it is imported only when this is run.
+    try:
+        from muesr.core import Sample
+        from muesr.core.atoms import Atoms
+        from muesr.engines.clfc import find_largest_sphere, locfield
+    except ImportError as exc:  # pragma: no cover
+        raise ImportError(
+            "The dipolar field is computed with `muesr`, which is not installed: "
+            "install it, e.g. `pip install git+https://github.com/bonfus/muesr@master`."
+        ) from exc
+
 
     # set-up required parameters
     assert p_st.num_sites == len(magm)
