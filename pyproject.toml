@@ -26,8 +26,7 @@ dependencies = [
     "pymatgen",
     "spglib>=1.9",
     "pyyaml>=3.0",
-    "mulfc @ git+https://github.com/bonfus/muLFC.git@v0.0.4",
-    "muesr @ git+https://github.com/bonfus/muesr@master",
+    "pylocfield @ git+https://github.com/bonfus/pylocfield@main",
     "aiida-impuritysupercellconv @ git+https://github.com/mikibonacci/aiida-impuritysupercellconv@main",
 ]
 

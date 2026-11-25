@@ -57,7 +57,7 @@ kwargs = dict(
     pw_code=pw_code,
     pp_code=pp_code,
     structure=structure,
-    mu_spacing=0.5,
+    mu_spacing=1,
     sc_matrix=[[1, 0, 0], [0, 1, 0], [0, 0, 1]], # very minimal supercell for a quick test; increase if you have time and resources
     charge_supercell=True,
     full_dft_relax=True,
@@ -77,7 +77,7 @@ builder = FindMuonWorkChain.get_builder_from_protocol(**kwargs)
 
 # Adjust scheduler options to match your cluster
 builder.relax.base_relax.pw.metadata.options = {
-    'resources': {'num_machines': 1, 'num_mpiprocs_per_machine': 4},
+    'resources': {'num_machines': 1, 'num_mpiprocs_per_machine': 1},
     'max_wallclock_seconds': 7200,
 }
 
