@@ -865,7 +865,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     metadata={"store_provenance": False},
                 ).get_kpoints_mesh()
     
-        if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
+        if np.all(np.array(mesh[0]) == 1):
             self.report("We don't need a Gamma point pre-relaxation, Gamma is anyway the only sampled point.")
             self.ctx.set_gamma_only = not self.ctx.non_collinear # so we set gamma point only... in the dft runs
             return False
@@ -906,12 +906,20 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
         return should_run_pre_clustering
 
     def run_cluster_analysis(self):
-        # Always analyze the relaxed structures if full k-mesh relaxation, and optionally analyze and recompute if specified in the inputs for Gamma only and MLIPs.
-        if self.should_pre_clustering() and not self.ctx.pre_clustering_done:
+        # Always analyze the relaxed structures after the full k-mesh relaxation, and optionally (pre-clustering) analyze
+        # and recompute after the Gamma only and the MLIP relaxations, which are the pre-relaxations.
+        #
+        # The full relaxation is checked FIRST. If it were not, then when the Gamma pre-relaxation is skipped
+        # (the mesh is 1x1x1: Gamma is the only point sampled anyway) but `pre_clustering` and `gamma_pre_relax` are True,
+        # `should_pre_clustering()` would be True and `pre_clustering_done` False after the *full* relaxation: the
+        # pre-clustering would be run on the fully relaxed structures, instead of the full analysis (so the magnetically
+        # inequivalent sites would not be searched), and it would select the representative structures of the clusters, which
+        # `new_struct_after_analyze` would then send to a second full relaxation, i.e. the same calculations twice.
+        if self.ctx.run_type == "full":
+            self.analyze_relaxed_structures(mode='full')
+        elif self.should_pre_clustering() and not self.ctx.pre_clustering_done:
             self.analyze_relaxed_structures(mode='pre-clustering', d_tol=0.25)
             self.ctx.pre_clustering_done = True
-        elif self.ctx.run_type == "full":
-            self.analyze_relaxed_structures(mode='full')
         else:
             self.report("Skipping pre-clustering of structures after pre-relaxation as specified in the inputs.")
     
@@ -1263,7 +1271,7 @@ class FindMuonWorkChain(ProtocolMixin, WorkChain):
                     metadata={"store_provenance": False},
                 ).get_kpoints_mesh()
     
-            if np.all(np.array(mesh[0]) == 1) and np.all(np.array(mesh[0]) == 1):
+            if np.all(np.array(mesh[0]) == 1):
                 settings = inputs.pw.settings.get_dict() if hasattr(inputs.pw, "settings") else {}
                 settings["GAMMA_ONLY"] = True
                 inputs.pw.settings = orm.Dict(dict=settings)

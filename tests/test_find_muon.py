@@ -182,3 +182,103 @@ def test_get_builder_from_protocol_signature():
     for name in ("pw_code", "structure", "mu_spacing", "sc_matrix", "magmom",
                  "spin_pol_dft", "ML_pre_relax", "gamma_pre_relax", "full_dft_relax"):
         assert name in params, f"Parameter '{name}' missing from get_builder_from_protocol"
+
+# ---------------------------------------------------------------------------
+# No relaxation is done twice: the cluster analysis after a skipped Gamma pre-relaxation
+# ---------------------------------------------------------------------------
+
+class _FakeWorkChain:
+    """Just what `run_cluster_analysis` and `new_struct_after_analyze` use, to follow the control flow of the outline.
+
+    `analyze_relaxed_structures` is replaced by a recorder: the 'pre-clustering' analysis keeps one (relaxed) structure
+    per cluster, the 'full' one only the magnetically inequivalent sites (none here), as the real ones do.
+    """
+
+    should_pre_clustering = FindMuonWorkChain.should_pre_clustering
+    run_cluster_analysis = FindMuonWorkChain.run_cluster_analysis
+    new_struct_after_analyze = FindMuonWorkChain.new_struct_after_analyze
+
+    def __init__(self, run_type, pre_clustering, gamma_pre_relax, pre_clustering_done=False):
+        from types import SimpleNamespace
+
+        self.inputs = SimpleNamespace(
+            pre_clustering=SimpleNamespace(value=pre_clustering), gamma_pre_relax=SimpleNamespace(value=gamma_pre_relax)
+        )
+        self.ctx = SimpleNamespace(
+            run_type=run_type,
+            supc_list=["s0", "s1", "s2"],
+            relaxed_outputs=[1, 2, 3],
+            has_magnetic_inequivalent=False,
+            pre_clustering_done=pre_clustering_done,
+        )
+        self.modes = []
+
+    def report(self, message):
+        pass
+
+    def analyze_relaxed_structures(self, mode="pre-clustering", d_tol=0.5):
+        self.modes.append(mode)
+        self.ctx.supc_list = ["s0"] if mode == "pre-clustering" else []
+
+
+@pytest.mark.parametrize("pre_clustering", [True, False])
+@pytest.mark.parametrize("gamma_pre_relax", [True, False])
+def test_full_relaxation_is_followed_by_the_full_analysis_and_no_second_round(pre_clustering, gamma_pre_relax):
+    """After the full relaxation the full analysis is done, whatever happened before.
+
+    In particular when the Gamma pre-relaxation was skipped (the mesh is 1x1x1) with `pre_clustering` and
+    `gamma_pre_relax` both True: the pre-clustering must not be done on the fully relaxed structures, because then
+    `new_struct_after_analyze` would send the cluster representatives to a second full relaxation.
+    """
+    workchain = _FakeWorkChain("full", pre_clustering, gamma_pre_relax)
+    workchain.run_cluster_analysis()
+    assert workchain.modes == ["full"]
+    assert workchain.new_struct_after_analyze() is False  # nothing magnetically inequivalent: no second round
+
+
+def test_pre_clustering_after_the_gamma_pre_relaxation_is_unchanged():
+    """After the Gamma pre-relaxation, with `pre_clustering`, the pre-clustering is done (once), and a new round follows."""
+    workchain = _FakeWorkChain("gamma", pre_clustering=True, gamma_pre_relax=True)
+    workchain.run_cluster_analysis()
+    assert workchain.modes == ["pre-clustering"]
+    assert workchain.ctx.pre_clustering_done is True
+    assert workchain.new_struct_after_analyze() is True  # the representatives are relaxed with the full mesh
+
+    # a second pre-relaxation (e.g. Gamma after an MLIP one) does not repeat it
+    workchain = _FakeWorkChain("gamma", True, True, pre_clustering_done=True)
+    workchain.run_cluster_analysis()
+    assert workchain.modes == []
+
+
+def test_no_pre_clustering_after_a_pre_relaxation_when_not_asked():
+    workchain = _FakeWorkChain("gamma", pre_clustering=False, gamma_pre_relax=True)
+    workchain.run_cluster_analysis()
+    assert workchain.modes == []
+
+
+def test_gamma_pre_relaxation_is_skipped_for_a_1x1x1_mesh(aiida_profile, generate_builder):
+    """With a mesh of one k-point, Gamma is the only sampled point: no pre-relaxation, and the full ones use Gamma only."""
+    builder = generate_builder()
+    builder.gamma_pre_relax = orm.Bool(True)
+    builder.kpoints_distance = orm.Float(100.0)  # a huge spacing: the mesh is 1x1x1
+    process = instantiate_process(get_manager().get_runner(), builder)
+    process.ctx.supc_list = [builder.structure]
+    process.ctx.non_collinear = False
+    process.ctx.set_gamma_only = False
+
+    assert process.should_run_gamma_relaxations() is False
+    assert process.ctx.set_gamma_only is True
+    assert process.should_run_full_relaxations() is True  # the (only) relaxation
+
+
+def test_gamma_pre_relaxation_is_run_for_a_denser_mesh(aiida_profile, generate_builder):
+    builder = generate_builder()
+    builder.gamma_pre_relax = orm.Bool(True)
+    builder.kpoints_distance = orm.Float(0.1)  # a dense mesh
+    process = instantiate_process(get_manager().get_runner(), builder)
+    process.ctx.supc_list = [builder.structure]
+    process.ctx.non_collinear = False
+    process.ctx.set_gamma_only = False
+
+    assert process.should_run_gamma_relaxations() is True
+    assert process.ctx.run_type == "gamma"
