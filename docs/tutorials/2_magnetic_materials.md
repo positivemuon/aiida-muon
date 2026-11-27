@@ -3,7 +3,7 @@
 This tutorial focuses on magnetic systems and the additional outputs that
 `FindMuonWorkChain` produces for them: the **contact hyperfine field** (from
 the DFT spin density) and the **classical dipolar field** (computed analytically
-with `muesr`).
+with `pylocfield`).
 
 We use BCC iron as the example throughout.
 
@@ -25,7 +25,7 @@ When `magmom` is present the workflow:
 - After finding the unique muon sites, runs a final SCF with the muon placed at
   the unit-cell origin to compute the spin density via `pp.x`.
 - Computes the contact hyperfine field from that density.
-- Computes the dipolar field using the `muesr` / `muLFC` library.
+- Computes the dipolar field using the `pylocfield` library.
 
 !!! note "Collinear vs non-collinear"
     By default the workflow treats the magnetism as collinear and projects the
@@ -135,7 +135,7 @@ muon at the origin of the unit cell.
 
 ## 6. Understanding the dipolar field
 
-The dipolar field is evaluated by `muesr` / `muLFC` using the converged magnetic
+The dipolar field is evaluated by `pylocfield` using the converged magnetic
 structure and the candidate muon positions.  It is a purely classical quantity
 that depends only on the atomic magnetic moments and the muon position:
 
@@ -143,5 +143,11 @@ $$\mathbf{B}_\text{dip}(\mathbf{r}_\mu) =
 \frac{\mu_0}{4\pi} \sum_i \frac{3(\hat{r}_i \cdot \mathbf{\mu}_i)\hat{r}_i
 - \mathbf{\mu}_i}{r_i^3}$$
 
-The sum runs over all magnetic atoms in a large sphere centred on the muon.
-`muesr` determines the sphere radius automatically from the supercell geometry.
+The sum over the whole (infinite) lattice is done with the Ewald method of `pylocfield`, on the pristine structure.
+The effect of the muon-induced relaxation is added by correcting the direct sum on the atoms within a sphere
+centred on the muon, whose radius is the smallest lattice parameter of the supercell: the direct sum on the relaxed
+structure minus the one on the pristine structure.
+
+The sums are truncated with cutoffs that are set from the cell, so that the neglected terms are negligible
+(about $10^{-22}$ of the field) while the calculation takes seconds instead of minutes: see
+[why these cutoffs](../advanced/workflow_internals.md#ewald-cutoffs-of-the-dipolar-field-why-these-values).

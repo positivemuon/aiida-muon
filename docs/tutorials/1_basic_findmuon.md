@@ -189,15 +189,21 @@ if node.outputs.unique_sites_dipolar:
 
 ### Export to a human-readable table
 
-The `export_findmuon` utility converts the workflow outputs into a pandas DataFrame:
+The `export_findmuon_data` utility converts the workflow outputs into pandas DataFrames, one for the unique sites and
+one for all the sites before clustering:
 
 ```python
-from aiida_muon.utils.export_findmuon import get_clustering_after_run
+from aiida_muon.utils.export_findmuon import export_findmuon_data
 
-# Load workchain data from the AiiDA node
-df = get_clustering_after_run(node)
-print(df)
+exported = export_findmuon_data(node.outputs)
+print(exported["table"])       # unique sites
+print(exported["table_all"])   # all sites, with the cluster group
 ```
+
+Each row is a muon site. `supercell_index` is the id of its relaxation (supercell), and `atom_index_in_unit_cell`
+is the 1-based number of its muon in `exported["unit_cell"]` (or `exported["unit_cell_all"]` for `table_all`):
+use `atom_index_in_unit_cell - 1` to index ASE. `supercell_index` starts from 0.
+See [Analyse the results](../how_to/analyze_results.md) for all the columns.
 
 ---
 
@@ -215,4 +221,4 @@ The workflow executed the following steps:
    proximity; duplicates are discarded.
 6. **Hyperfine and dipolar fields** (magnetic only) — a final SCF places the
    muon at the origin (`PwBaseWorkChain`) and `pp.x` evaluates the spin density.
-   The dipolar field is computed with `muesr`.
+   The dipolar field is computed with `pylocfield`.

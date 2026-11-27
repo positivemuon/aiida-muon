@@ -114,7 +114,19 @@ QE parameters.
 ### `compute_dipolar_field`
 
 Computes the classical dipolar field at each unique muon site using
-`muesr` / `muLFC`.  Called internally by `FindMuonWorkChain.get_dipolar_field`.
+`pylocfield`.  Called internally by `FindMuonWorkChain.get_dipolar_field`.
+
+### `get_ewald_cutoffs`
+
+```python
+r_c, g_c = get_ewald_cutoffs(cell)
+```
+
+The cutoffs of the Ewald sum of the dipolar field for the supercell `cell` (with the muon at its centre):
+`r_c` in Å for the real-space sum, `g_c` in Å$^{-1}$ (without the factor $2\pi$) for the reciprocal-space one. They are derived from the Ewald parameter
+`EWALD_RHO`, a tolerance of $10^{-10}$ and a safety factor of 1.5, and are 30–100 times smaller in cost than the
+defaults of `pylocfield` with the same result. See
+[why these cutoffs](../advanced/workflow_internals.md#ewald-cutoffs-of-the-dipolar-field-why-these-values).
 
 ---
 
@@ -149,14 +161,39 @@ Maps Hubbard parameters from `reference` (either a `HubbardStructureData` or a
 
 Post-processing helpers for use after a workflow finishes.
 
+### `export_findmuon_data`
+
+```python
+export_findmuon_data(findmuon_output_node, include_deprecated_columns=True)
+```
+
+Returns a dict with the DataFrames `table` (unique sites) and `table_all` (all the sites, before clustering, with the
+`cluster group`), the `distortions`, and the structures `unit_cell`, `unit_cell_all` and `supercell_all`, which contain
+the muon sites (`unit_cell` only the unique ones). `findmuon_output_node` is the `outputs` of a finished
+`FindMuonWorkChain`.
+
+Each row of a table is a muon site, identified by:
+
+- `supercell_index`: the id of its relaxation (the key in `all_index_uuid`, `all_sites`, `unique_sites`). It is also
+  the named index of the tables. It is not a position.
+- `atom_index_in_unit_cell`: the **1-based** number of its muon in `unit_cell` (for `table`) or `unit_cell_all` (for
+  `table_all`). Use `atom_index_in_unit_cell - 1` with ASE or `sites`, and check that your visualizer is 1-based.
+  (`supercell_index` starts from 0.)
+- `label`: a letter, in order of increasing energy.
+
+The old columns `muon_index` (now `supercell_index`) and `muon_index_global_unitcell` (now
+`atom_index_in_unit_cell`, same values) are returned too, for one release, unless `include_deprecated_columns=False`.
+
 ### `get_clustering_after_run`
 
 ```python
-get_clustering_after_run(workchain_node)
+get_clustering_after_run(findmuon_node, d_tol=0.5, s_tol=0.05, e_tol=0.05, a_tol=1e-3)
 ```
 
-Returns a `pandas.DataFrame` summarising all relaxed sites: fractional position,
-energy relative to the minimum, cluster label, and multiplicity.
+Clusters the relaxed muon positions of a finished `FindMuonWorkChain`. Returns a dict with the unique positions
+(`unique_pos`), the magnetically inequivalent structures still to be computed (`mag_inequivalent`) and the `mapping`:
+one entry per site, in the order of the `all_sites` output, with the (1-based) position of the representative of the
+cluster of the site.
 
 ---
 
@@ -170,10 +207,12 @@ get_distortions(unrelaxed_supercell, relaxed_supercell,
 Computes atomic displacements (distortions) induced by the muon relaxation.
 Useful for visualising the local lattice distortion around each candidate site.
 
-**Returns** dict with:
+**Returns** a dict with one entry per element (other than the muon); each entry is a dict with, for the atoms of that
+element sorted by their initial distance from the muon:
 
-- `distortion_norm` — norm of displacement vector for each atom (Å)
-- `delta_distance` — change in distance from the muon to each atom (Å)
+- `atm_distance_init`, `atm_distance_final` — distance from the muon before and after the relaxation (Å)
+- `distortion` — norm of the displacement vector (Å)
+- `delta_distance` — change in distance from the muon (Å)
 
 ---
 

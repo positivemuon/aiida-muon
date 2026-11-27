@@ -11,13 +11,58 @@ from ase import Atoms
 
 # NOTE: these functions are used in the aiidalab-qe-muon plugin, so a change should be tested against it.
 
+# Names of the columns that identify a muon site in the tables (see `produce_muonic_dataframe`).
+SUPERCELL_INDEX = "supercell_index"
+ATOM_INDEX_IN_UNIT_CELL = "atom_index_in_unit_cell"
+# Old names, kept for one release (see `produce_muonic_dataframe`, `include_deprecated_columns`).
+DEPRECATED_MUON_INDEX = "muon_index"
+DEPRECATED_MUON_INDEX_GLOBAL_UNITCELL = "muon_index_global_unitcell"
+
+
+def _site_key_order(key):
+    """Sort the site keys numerically (they are strings of integers: "10" must come after "2")."""
+    try:
+        return (0, int(key), "")
+    except (TypeError, ValueError):
+        return (1, 0, str(key))
+
+
+def get_ordered_site_keys(findmuon_output_node: orm.Node, before_clustering: bool = False) -> list:
+    """The supercell indexes (keys of ``all_sites``) of the muon sites, in a well defined order.
+
+    This is the order in which the muons are appended to the unit cell by :func:`produce_collective_unit_cell`,
+    and the order of the muons in :func:`get_unit_cell_atom_indices`: both use this function, so they agree.
+
+    :param before_clustering: if ``True``, all the sites; otherwise only the unique ones (after clustering).
+    """
+    keys = list(findmuon_output_node.all_sites.get_dict().keys())
+    if not before_clustering:
+        unique = findmuon_output_node.unique_sites.get_dict().keys()
+        keys = [key for key in keys if key in unique]
+    return sorted(keys, key=_site_key_order)
+
+
+def get_unit_cell_atom_indices(n_host_sites: int, site_keys) -> dict:
+    """The (0-based) index of each muon atom in the unit cell built by :func:`produce_collective_unit_cell`.
+
+    The muons come after the ``n_host_sites`` atoms of the host, in the order of ``site_keys``.
+
+    :return: a dictionary ``{supercell index (str): atom index (int)}``.
+    """
+    return {key: n_host_sites + position for position, key in enumerate(site_keys)}
+
+
 def refine_mapping(table,mapping, list_index):
     """
     Utility function the refine the mapping of the muon sites to the cluster labels.
     Basically, the cluster label is the label of the most representative muon site in the cluster, i.e. the one we show in the unique sites table.
+
+    :param table: the table of all the sites (one row per site), with the ``label`` and ``supercell_index`` columns.
+    :param mapping: the ``mapping`` of the clustering (see ``get_clustering_after_run``): one entry per site, in the
+        order in which the sites are listed in the ``all_sites`` output.
+    :param list_index: the supercell indexes of the sites, in the same order as ``mapping``.
     """
     new_mapping = {}
-    #print("Refining mapping:", mapping, "for", list_index)
 
     # we need to remap the mapping to be unique and sorted, so that we can use it as a cluster label.
     # e.g. if mapping = [1, 2, 2, 1, 1, 6, 7, 6], we want to have {1:1, 2:2, 6:3, 7:4}
@@ -25,20 +70,16 @@ def refine_mapping(table,mapping, list_index):
     unique_sorted = {v: i+1 for i, v in enumerate(sorted(set(mapping)))}
     remapped = [unique_sorted[x] for x in mapping]
 
-    if len(mapping) != len(remapped):
+    if len(list_index) != len(remapped):
         raise ValueError("Mapping and list_index must have the same length.")
-    
+
     for i,idx in zip(list_index,remapped):
-        #print(i,idx)
-        #cluster_label = table['label'][table.muon_index == str(idx)].values[0]
-        muon_label = table['label'][table.muon_index == i].values[0]
-        #print(f"Muon label: {muon_label} -> Cluster label: {cluster_label}")
+        muon_label = table['label'][table[SUPERCELL_INDEX] == int(i)].values[0]
         new_mapping[muon_label] = idx
-        #print(table['label'][table.muon_index == str(idx)].values, "->", table['label'][table.muon_index == i].values)
-        
+
     return new_mapping
-    
-    
+
+
 
 def get_distortions(
     unrelaxed_supercell: Atoms,
@@ -103,10 +144,34 @@ def assign_label(index):
     else:
         return chr(65 + index - 52) + "''"
 
-def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
+def produce_muonic_dataframe(
+    findmuon_output_node: orm.Node,
+    include_deprecated_columns: bool = True,
+) -> pd.DataFrame:
     """Produce two dataframes: one for the unique sites and one for all sites.
     
     In this way, we can do some post processing.
+
+    Each row is a muon site. A site is identified by several quantities, which are *not* interchangeable:
+
+    - ``supercell_index`` (int; also the name of the index of the tables): the identifier of the relaxation, i.e. the
+      key of the site in the ``all_index_uuid``, ``all_sites`` and ``unique_sites`` outputs of the ``FindMuonWorkChain``.
+      It is *not* a position, and it is unrelated to the order of the table, to ``label`` and to the energy.
+    - ``atom_index_in_unit_cell`` (int, **1-based**: the first atom is 1): the number of the muon *atom* in the unit
+      cell with all the muon sites, i.e. in ``exported["unit_cell"]`` for the table of the unique sites and in
+      ``exported["unit_cell_all"]`` for the table of all the sites (see :func:`produce_collective_unit_cell`).
+      ASE and Python are 0-based: to pick the muon with them use ``atom_index_in_unit_cell - 1``, e.g.
+      ``unit_cell.sites[atom_index_in_unit_cell - 1]``. Check whether your structure visualizer is 1-based too.
+      Note that ``supercell_index`` starts from 0 instead, as it is the key of the ``FindMuonWorkChain`` outputs.
+    - ``label`` (str): a letter, assigned in order of increasing energy (``A`` is the lowest energy site).
+      The sites that are not in the unique table get the following letters.
+    - ``cluster group`` (only in the table of all the sites): the group of the clustering to which the site belongs.
+    - ``structure_id_pk``: the pk of the relaxed supercell structure.
+
+    :param include_deprecated_columns: also return the columns with the old names: ``muon_index`` (the
+        ``supercell_index``, as a string) and ``muon_index_global_unitcell`` (the same as ``atom_index_in_unit_cell``). They will be removed in a future release. Before the renaming, ``muon_index_global_unitcell`` was
+        computed from the position in ``all_index_uuid``, and in the table of the unique sites it was not
+        the index of the muon in ``unit_cell`` when the clustering had removed sites.
     """
     bars = {
         "magnetic_units": "tesla",
@@ -120,10 +185,35 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
         ],
         "muons": {},
     }
+
+    # the muon atoms are appended to the host atoms of the unit cell: see `produce_collective_unit_cell`.
+    n_host_sites = len(findmuon_output_node.all_index_uuid.creator.caller.inputs.structure.sites)
+    atom_index_all = get_unit_cell_atom_indices(
+        n_host_sites, get_ordered_site_keys(findmuon_output_node, before_clustering=True)
+    )
+    atom_index_unique = get_unit_cell_atom_indices(
+        n_host_sites, get_ordered_site_keys(findmuon_output_node)
+    )
+
+    def identifiers(idx, atom_index):
+        """The columns that identify the site (and the deprecated ones)."""
+        info = {
+            SUPERCELL_INDEX: int(idx),
+            # 1-based, as an atom number in a structure file; `atom_index` (a position in ASE) is 0-based.
+            ATOM_INDEX_IN_UNIT_CELL: atom_index[idx] + 1,
+        }
+        if include_deprecated_columns:
+            info[DEPRECATED_MUON_INDEX] = idx
+            info[DEPRECATED_MUON_INDEX_GLOBAL_UNITCELL] = atom_index[idx] + 1  # same as ATOM_INDEX_IN_UNIT_CELL
+        return info
+
+    deprecated_columns = (
+        [DEPRECATED_MUON_INDEX_GLOBAL_UNITCELL, DEPRECATED_MUON_INDEX] if include_deprecated_columns else []
+    )
     
     all_structures = {}
     distortions={}
-    for i, (idx, uuid) in enumerate(findmuon_output_node.all_index_uuid.get_dict().items(), start=1):
+    for idx, uuid in findmuon_output_node.all_index_uuid.get_dict().items():
         relaxwc = orm.load_node(uuid)
         if not relaxwc.is_finished_ok:
             continue
@@ -136,19 +226,16 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
         all_structures[idx]["structure_id_pk"] = structure_pk
         all_structures[idx]["label"] = idx
         all_structures[idx]["tot_energy"] = tot_energy
-        all_structures[idx]["muon_position_cc"] = list(
-                np.round(
-                    np.array(
-                        findmuon_output_node.all_sites.get_dict()[idx][0]["sites"][
-                            -1
-                        ]["abc"]
-                    ),
-                    3,
+        # `.tolist()`: a list of Python floats (a list of `np.float64` is printed as `[np.float64(0.1), ...]`).
+        all_structures[idx]["muon_position_cc"] = np.round(
+                np.array(
+                    findmuon_output_node.all_sites.get_dict()[idx][0]["sites"][
+                        -1
+                    ]["abc"]
                 ),
-            )
-        all_structures[idx]["muon_index"] = idx
-        all_structures[idx]["muon_index_global_unitcell"] = \
-            len(findmuon_output_node.all_index_uuid.creator.caller.inputs.structure.sites) + i
+                3,
+            ).tolist()
+        all_structures[idx].update(identifiers(idx, atom_index_all))
         
         # distortions.
         distortions[idx] = get_distortions(
@@ -161,29 +248,26 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
             bars["muons"][idx] = {}
             bars["muons"][idx]["structure_id_pk"] = structure_pk
             bars["muons"][idx]["label"] = idx # a label to recognise the supercell/muon site
-            bars["muons"][idx]["muon_index"] = idx # sure that we need it?
             bars["muons"][idx]["tot_energy"] = tot_energy
-            bars["muons"][idx]["muon_position_cc"] = list(
-                np.round(
-                    np.array(
-                        findmuon_output_node.unique_sites.get_dict()[idx][0]["sites"][
-                            -1
-                        ]["abc"]
-                    ),
-                    3,
+            bars["muons"][idx]["muon_position_cc"] = np.round(
+                np.array(
+                    findmuon_output_node.unique_sites.get_dict()[idx][0]["sites"][
+                        -1
+                    ]["abc"]
                 ),
-            )
-            bars["muons"][idx]["muon_index_global_unitcell"] = \
-                len(findmuon_output_node.all_index_uuid.creator.caller.inputs.structure.sites) + i # remember: i starts from 1        
+                3,
+            ).tolist()
+            # the index of the muon in `unit_cell`, which contains only the unique sites.
+            bars["muons"][idx].update(identifiers(idx, atom_index_unique))
         
     fields_list = []
     if "unique_sites_dipolar" in findmuon_output_node:
         fields_list = ["B_T", "Bdip", "B_T_norm", "Bdip_norm", "B_hf_norm"] # "hyperfine", 
         for configuration in findmuon_output_node.unique_sites_dipolar.get_list():
             for B in ["B_T", "Bdip"]:
-                bars["muons"][str(configuration["idx"])][B] = list(
-                    np.round(np.array(configuration[B]), 3)
-                )
+                bars["muons"][str(configuration["idx"])][B] = np.round(
+                    np.array(configuration[B]), 3
+                ).tolist()
                 if B in ["B_T"]:
                     bars["muons"][str(configuration["idx"])]["B_T_norm"] = round(
                         np.linalg.norm(np.array(configuration[B])), 3
@@ -221,8 +305,8 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
             "tot_energy", 
             "muon_position_cc",
         ]+ fields_list
-        +["muon_index_global_unitcell"]
-        +["muon_index"],
+        +[ATOM_INDEX_IN_UNIT_CELL, SUPERCELL_INDEX]
+        +deprecated_columns,
     )
     
     # redefine the "label" to be letters from A to Z
@@ -242,8 +326,10 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
             "delta_E", 
             "tot_energy", 
             "muon_position_cc",
-            "muon_index_global_unitcell",
-            "muon_index"]
+            ATOM_INDEX_IN_UNIT_CELL,
+            SUPERCELL_INDEX,
+        ]
+        +deprecated_columns
     )
     
     # I need to order the labels in such a way that are the same as in df, and add new letters for the clustering-wise-excluded sites.
@@ -256,13 +342,21 @@ def produce_muonic_dataframe(findmuon_output_node: orm.Node) -> pd.DataFrame:
     df_all.loc["label"] = labels
     
     # adding the clustering information. This is a list of all sites, but with the index of the representative muon of the cluster: [1,3,3,1,1,6,7,6]
+    # The mapping follows the order of the sites in the `all_sites` output (see `get_clustering_after_run`).
     clustering = get_clustering_after_run(findmuon_output_node.all_index_uuid.creator.caller)
-    refined_mapping = refine_mapping(df_all.transpose(),clustering["mapping"], list_index = findmuon_output_node.all_index_uuid.get_dict().keys())
+    refined_mapping = refine_mapping(
+        df_all.transpose(),
+        clustering["mapping"],
+        list_index = list(findmuon_output_node.all_sites.get_dict().keys()),
+    )
     df_all.loc["cluster group"] = [refined_mapping.pop(label,label) for label in df_all.loc["label"]]
 
     # then swap row and columns (for sure can be done already above for df, but useful to keep the same order before this point)
     df = df.transpose()
     df_all = df_all.transpose()
+    # name the index, so that it is clear what it is (e.g. in the header of the first column of a csv file).
+    df.index.name = SUPERCELL_INDEX
+    df_all.index.name = SUPERCELL_INDEX
     
     
     return df, df_all, distortions
@@ -286,30 +380,30 @@ def produce_collective_unit_cell(findmuon_output_node: orm.Node, before_clusteri
     # append tags to recognize the muon site.
     input_str.tags = [None] * input_str.num_sites
 
-    for key in findmuon_output_node.all_sites.get_dict():
-        if key in findmuon_output_node.unique_sites.get_dict().keys() or before_clustering:
-            # print("H"+key, qeapp_node.outputs.unique_sites.get_dict()[key][1], (qeapp_node.outputs.unique_sites.get_dict() [key][1]-e_min))
-            # fo.write("%s %16f %16f \n "%  ("H"+key, uniquesites_dict[key][1], (uniquesites_dict[key][1]-e_min)))
-            py_struc = Structure.from_dict(
-                findmuon_output_node.all_sites.get_dict()[key][0]
-            )
-            musite = py_struc.frac_coords[py_struc.atomic_numbers.index(1)]
-            if not supercell:
-                mupos = np.dot(musite, sc_matrix) % 1
-            else:
-                mupos = musite
-            # bad workaround for strange bug.
+    # the order of the muons is the one of `get_unit_cell_atom_indices`; `input_str.tags` records it.
+    for key in get_ordered_site_keys(findmuon_output_node, before_clustering=before_clustering):
+        # print("H"+key, qeapp_node.outputs.unique_sites.get_dict()[key][1], (qeapp_node.outputs.unique_sites.get_dict() [key][1]-e_min))
+        # fo.write("%s %16f %16f \n "%  ("H"+key, uniquesites_dict[key][1], (uniquesites_dict[key][1]-e_min)))
+        py_struc = Structure.from_dict(
+            findmuon_output_node.all_sites.get_dict()[key][0]
+        )
+        musite = py_struc.frac_coords[py_struc.atomic_numbers.index(1)]
+        if not supercell:
+            mupos = np.dot(musite, sc_matrix) % 1
+        else:
+            mupos = musite
+        # bad workaround for strange bug.
+        if len(mupos) == 1:
+            mupos = mupos[0]
             if len(mupos) == 1:
                 mupos = mupos[0]
-                if len(mupos) == 1:
-                    mupos = mupos[0]
-            input_str.append(
-                species="H" + key,
-                coords=mupos,
-                coords_are_cartesian=False,
-                validate_proximity=False,
-            )
-            input_str.tags.append(key)
+        input_str.append(
+            species="H" + key,
+            coords=mupos,
+            coords_are_cartesian=False,
+            validate_proximity=False,
+        )
+        input_str.tags.append(key)
 
     kind_properties = []
     for i in input_str.sites:
@@ -327,9 +421,17 @@ def produce_collective_unit_cell(findmuon_output_node: orm.Node, before_clusteri
 
     
 
-def export_findmuon_data(findmuon_output_node: orm.Node) -> dict:
-    
-    df, df_all, distortions = produce_muonic_dataframe(findmuon_output_node)
+def export_findmuon_data(findmuon_output_node: orm.Node, include_deprecated_columns: bool = True) -> dict:
+    """Export the results of a ``FindMuonWorkChain`` as dataframes, distortions and structures.
+
+    See :func:`produce_muonic_dataframe` for the meaning of the columns, and in particular of the two indexes
+    ``supercell_index`` and ``atom_index_in_unit_cell``. The latter is the 1-based number of the muon in ``unit_cell``
+    (table of the unique sites) or in ``unit_cell_all`` (table of all the sites): use ``atom_index_in_unit_cell - 1``
+    to index ASE or ``sites``.
+    """
+    df, df_all, distortions = produce_muonic_dataframe(
+        findmuon_output_node, include_deprecated_columns=include_deprecated_columns
+    )
     return {
         "table": df,
         "table_all": df_all,

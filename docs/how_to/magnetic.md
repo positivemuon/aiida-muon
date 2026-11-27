@@ -6,7 +6,7 @@ When magnetic moments are provided the workflow automatically:
 1. Assigns spin-up / spin-down *kind names* for `pw.x` starting magnetisation.
 2. Runs a final SCF with `pp.x` to compute the spin density at the muon site.
 3. Computes the **contact hyperfine field** from the spin density.
-4. Computes the classical **dipolar field** with `muesr`.
+4. Computes the classical **dipolar field** with `pylocfield`.
 
 ---
 

@@ -39,24 +39,39 @@ for label, data in unique.items():
 
 ## Exporting to a pandas DataFrame
 
-The `aiida_muon.utils.export_findmuon` module provides a high-level helper that
-assembles a human-readable summary table:
+`export_findmuon_data` assembles the summary tables, the distortions and the structures with all the muon sites:
 
 ```python
-from aiida_muon.utils.export_findmuon import get_clustering_after_run, get_distortions
+from aiida_muon.utils.export_findmuon import export_findmuon_data, get_distortions
 
-# Summary table (unique sites, energies, cluster mapping)
-df = get_clustering_after_run(node)
-print(df.to_string())
+exported = export_findmuon_data(node.outputs)   # `node` is the finished FindMuonWorkChain
+exported["table"]       # the unique sites (after clustering), one row per site
+exported["table_all"]   # all the relaxed sites (before clustering), with the clustering information
+exported["distortions"] # the distortion around each site, see below
+exported["unit_cell"]   # unit cell of the host with the unique muon sites
+exported["unit_cell_all"]  # unit cell of the host with all the muon sites
 ```
 
-The DataFrame includes columns such as:
+### How the muon sites are identified
 
-- `muon_index` — index of the relaxed supercell
-- `label` — cluster label
-- `position` — fractional coordinates of the relaxed muon
-- `energy_diff` — energy relative to the lowest-energy site (eV)
-- `multiplicity` — number of symmetry-equivalent sites in the unit cell
+A site is identified by several quantities, which are **not** interchangeable:
+
+| Column | Meaning |
+|---|---|
+| `supercell_index` | The id of the relaxation (supercell) of the site, **starting from 0**: the key of the site in the `all_index_uuid`, `all_sites` and `unique_sites` outputs. It is also the (named) index of both tables. It is *not* a position: it is unrelated to the order of the rows, to `label` and to the energy. |
+| `atom_index_in_unit_cell` | The **1-based** number of the muon *atom* in the unit cell with all the muon sites (the first atom is 1): `exported["unit_cell"]` for `table`, `exported["unit_cell_all"]` for `table_all`. ASE and Python are 0-based, so to pick the muon with them use `atom_index_in_unit_cell - 1`: `exported["unit_cell"].get_ase()[atom_index - 1]`. Please check that your structure visualizer is 1-based too. |
+| `label` | A letter, in order of increasing energy: `A` is the lowest energy site. The sites that are not in `table` get the following letters. |
+| `cluster group` | Only in `table_all`: the group of the clustering to which the site belongs. |
+| `structure_id_pk` | The pk of the relaxed supercell structure. |
+
+Other columns: `delta_E` and `tot_energy` (meV), `muon_position_cc` (crystal coordinates of the muon in the supercell),
+and, if magnetic fields were computed, `B_T`, `Bdip`, `B_T_norm`, `Bdip_norm`, `B_hf_norm` (Tesla).
+
+!!! note "Renamed columns"
+    `supercell_index` was called `muon_index` (as a string) and `atom_index_in_unit_cell` was called
+    `muon_index_global_unitcell` (also 1-based, but wrong in `table` when the clustering had removed sites: it is now correct).
+    The old columns are still returned, for one release, with `include_deprecated_columns=True` (the default); pass
+    `include_deprecated_columns=False` to drop them. `muon_index_global_unitcell` has now the same values as `atom_index_in_unit_cell`.
 
 ### Per-site distortions
 
@@ -68,9 +83,12 @@ unrelaxed = orm.load_node(uuid_unrelaxed).get_ase()
 relaxed   = orm.load_node(uuid_relaxed).get_ase()
 
 distortions = get_distortions(unrelaxed, relaxed)
-print("Distortion norms (Å):", distortions['distortion_norm'])
-print("Δ distances from muon (Å):", distortions['delta_distance'])
+for element, data in distortions.items():          # one entry per element, other than the muon
+    print(element, "distortion norms (Å):", data["distortion"])
+    print(element, "Δ distances from muon (Å):", data["delta_distance"])
 ```
+
+`exported["distortions"]` contains the same, for every site, with the `supercell_index` (as a string) as key.
 
 ---
 
